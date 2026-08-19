@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ClipboardCheck, Search, ShieldAlert, DoorClosed, RefreshCw, FileSpreadsheet, Settings, Trash2, Plus } from 'lucide-react';
+import { ClipboardCheck, Search, ShieldAlert, RefreshCw, FileSpreadsheet, Settings, Trash2, Plus } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../supabaseClient';
 import type { Student } from '../types/student';
 import type { User } from '../types/auth';
 import './RoomScoring.css';
 
-type ScoringStudent = Student & { room?: string; roomName?: string; gender?: string; isAbsent?: boolean; isLate?: boolean };
+type ScoringStudent = Student & { room?: string; roomName?: string; gender?: string; isAbsent?: boolean; isLate?: boolean; thayCo?: string; ThayCo?: string; teacher?: string; Phong?: string };
 
 const DEFAULT_VIOLATIONS = [
   { code: 'V', displayCode: 'V', label: '1. Điểm danh: Không phép (V)', penalty: 2 },
@@ -41,101 +41,36 @@ interface RoomScoringProps {
 export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], currentUser }) => {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [selectedRoom, setSelectedRoom] = useState<string>('Tất cả');
+  const [selectedTeacher, setSelectedTeacher] = useState<string>('Tất cả');
   const [scores, setScores] = useState<ScoringMap>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<boolean>(false);
   const [violations, setViolations] = useState<ViolationRule[]>(DEFAULT_VIOLATIONS);
   const [isViolationModalOpen, setIsViolationModalOpen] = useState<boolean>(false);
 
-  // Form thêm lỗi mới trong Modal
   const [newCode, setNewCode] = useState<string>('');
   const [newLabel, setNewLabel] = useState<string>('');
   const [newPenalty, setNewPenalty] = useState<number>(1);
 
-  const MAX_PER_ROOM = 12;
-  const INITIAL_ROOMS = 20;
-
-  // Kiểm tra quyền quản lý
   const canManage = currentUser?.role === 'admin' || currentUser?.can_manage === true;
 
-  // --- ÁP DỤNG CHUẨN LOGIC XẾP PHÒNG ---
+  // --- LẤY TRỰC TIẾP TỪ CỘT 'Phong' VÀ 'ThayCo' CỦA BẢNG DanhSachSinhVien ---
   const processedStudents = useMemo<ScoringStudent[]>(() => {
     if (!students || students.length === 0) return [];
 
     const activeStudents = (students as ScoringStudent[]).filter((s) => !s.isAbsent);
-    const hasExistingRoom = activeStudents.some((s: ScoringStudent) => s.room || s.roomName);
-    if (hasExistingRoom) {
-      return activeStudents.map((st) => ({
-        ...st,
-        room: (st.roomName || st.room || 'Phòng 01').trim(),
-      }));
-    }
 
-    const females = activeStudents.filter((s) => s.gender === 'Nữ' || s.gender?.toLowerCase() === 'nu');
-    const sortedFemales = [...females.filter((s) => !s.isLate), ...females.filter((s) => s.isLate)];
-
-    const males = activeStudents.filter((s) => s.gender !== 'Nữ' && s.gender?.toLowerCase() !== 'nu');
-    const sortedMales = [...males.filter((s) => !s.isLate), ...males.filter((s) => s.isLate)];
-
-    let totalRoomsNeeded = Math.ceil(activeStudents.length / MAX_PER_ROOM);
-    if (totalRoomsNeeded < INITIAL_ROOMS) {
-      totalRoomsNeeded = INITIAL_ROOMS;
-    }
-
-    const rooms: { roomNumber: number; students: ScoringStudent[]; genderType: string }[] = Array.from(
-      { length: totalRoomsNeeded },
-      (_, i) => ({ roomNumber: i + 1, students: [], genderType: 'Trống' })
-    );
-
-    let currentRoomIdx = 0;
-
-    const fillGroupToRooms = (group: ScoringStudent[], gender: 'Nữ' | 'Nam') => {
-      if (group.length === 0) return;
-      if (
-        rooms[currentRoomIdx].students.length > 0 &&
-        (rooms[currentRoomIdx].genderType !== gender || rooms[currentRoomIdx].students.length >= MAX_PER_ROOM)
-      ) {
-        currentRoomIdx++;
-      }
-
-      for (const student of group) {
-        if (currentRoomIdx >= rooms.length) {
-          rooms.push({ roomNumber: rooms.length + 1, students: [], genderType: 'Trống' });
-        }
-        if (rooms[currentRoomIdx].students.length >= MAX_PER_ROOM) {
-          currentRoomIdx++;
-          if (currentRoomIdx >= rooms.length) {
-            rooms.push({ roomNumber: rooms.length + 1, students: [], genderType: 'Trống' });
-          }
-        }
-        rooms[currentRoomIdx].students.push(student);
-        rooms[currentRoomIdx].genderType = gender;
-      }
-      if (rooms[currentRoomIdx].students.length > 0) {
-        currentRoomIdx++;
-      }
-    };
-
-    fillGroupToRooms(sortedFemales, 'Nữ');
-    fillGroupToRooms(sortedMales, 'Nam');
-
-    const result: ScoringStudent[] = [];
-    rooms.forEach((r) => {
-      r.students.forEach((st) => {
-        const roomNumStr = r.roomNumber < 10 ? `Phòng 0${r.roomNumber}` : `Phòng ${r.roomNumber}`;
-        result.push({ ...st, room: roomNumStr });
-      });
-    });
-
-    return result;
+    return activeStudents.map((st) => ({
+      ...st,
+      room: (st.Phong ?? st.roomName ?? st.room ?? 'Chưa phân phòng').toString().trim(),
+      thayCo: (st.ThayCo ?? st.thayCo ?? st.teacher ?? 'Chưa phân công').toString().trim(),
+    }));
   }, [students]);
 
-  // Load danh mục lỗi và dữ liệu chấm điểm từ Supabase
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       try {
-        // 1. Tải danh mục lỗi từ bảng 'ViolationRules'
         let currentViolations = [...DEFAULT_VIOLATIONS];
         const { data: ruleData, error: ruleError } = await supabase.from('ViolationRules').select('*');
         if (!ruleError && ruleData && ruleData.length > 0) {
@@ -152,7 +87,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
           setViolations(currentViolations);
         }
 
-        // 2. Tải dữ liệu bảng 'ChamDiem'
         const { data, error } = await supabase.from('ChamDiem').select('*');
         if (error) {
           console.error('Lỗi lấy dữ liệu chấm điểm:', error);
@@ -295,7 +229,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
         penalty: penalty,
       };
 
-      // Tự động lưu luôn vào database để các lần sau không bị mất
       supabase.from('ViolationRules').upsert({
         Code: newRule.code,
         DisplayCode: newRule.displayCode,
@@ -317,7 +250,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     eventTarget.value = '';
   };
 
-  // Thêm lỗi mới từ Modal Quản lý
   const handleAddRuleFromModal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCode.trim()) return;
@@ -352,7 +284,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     alert('Thêm / Cập nhật quy định lỗi thành công!');
   };
 
-  // Xóa lỗi tùy chỉnh khỏi danh mục
   const handleDeleteRule = async (codeToDelete: string) => {
     if (DEFAULT_VIOLATIONS.some(v => v.code === codeToDelete)) {
       alert('Không thể xóa các lỗi mặc định hệ thống!');
@@ -364,40 +295,42 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     }
   };
 
-  const { roomList, roomCounts } = useMemo(() => {
-    const counts: Record<string, number> = { 'Tất cả': processedStudents.length };
+  // --- DANH SÁCH PHÒNG ĐỂ LỌC ---
+  const roomList = useMemo(() => {
     const rooms = new Set<string>();
-
     processedStudents.forEach((s) => {
-      if (s.room) {
-        rooms.add(s.room);
-        counts[s.room] = (counts[s.room] || 0) + 1;
-      }
+      if (s.room) rooms.add(s.room);
     });
-
-    const sortedRooms = Array.from(rooms).sort((a, b) =>
-      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
-    );
-
-    return { roomList: ['Tất cả', ...sortedRooms], roomCounts: counts };
+    return ['Tất cả', ...Array.from(rooms).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))];
   }, [processedStudents]);
 
+  // --- DANH SÁCH THẦY CÔ ĐỂ LỌC ---
+  const teacherList = useMemo(() => {
+    const teachers = new Set<string>();
+    processedStudents.forEach((s) => {
+      const teacherName = (s.thayCo || '').trim();
+      if (teacherName) teachers.add(teacherName);
+    });
+    return ['Tất cả', ...Array.from(teachers).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))];
+  }, [processedStudents]);
+
+  // --- LỌC SINH VIÊN THEO CẢ PHÒNG, THẦY CÔ VÀ TỪ KHÓA ---
   const filteredStudents = useMemo(() => {
     return processedStudents.filter((s) => {
-      const matchRoom = selectedRoom === 'Tất cả' || s.room === selectedRoom;
+      const roomMatch = selectedRoom === 'Tất cả' || s.room === selectedRoom;
+      const teacherName = (s.thayCo || '').trim();
+      const teacherMatch = selectedTeacher === 'Tất cả' || teacherName === selectedTeacher;
+      
       const search = searchTerm.toLowerCase().trim();
-      const matchSearch = !search || s.name.toLowerCase().includes(search) || (s.studentId && s.studentId.toLowerCase().includes(search));
-      return matchRoom && matchSearch;
+      const searchMatch = !search || s.name.toLowerCase().includes(search) || (s.studentId && s.studentId.toLowerCase().includes(search));
+      
+      return roomMatch && teacherMatch && searchMatch;
     });
-  }, [processedStudents, selectedRoom, searchTerm]);
+  }, [processedStudents, selectedRoom, selectedTeacher, searchTerm]);
 
   const handleExportExcel = () => {
     const wb = XLSX.utils.book_new();
-    const rooms = Array.from(new Set(processedStudents.map((s) => s.room || 'PhongKhac'))).sort((a, b) =>
-      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
-    );
-
-    if (rooms.length === 0) {
+    if (processedStudents.length === 0) {
       alert('Không có dữ liệu sinh viên để xuất Excel!');
       return;
     }
@@ -412,6 +345,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
         'MSV': st.studentId || st.id || '',
         'Họ và Tên': st.name || '',
         'Phòng': st.room || '',
+        'Giảng viên': st.thayCo || '',
         'Điểm Nề Nếp': finalScore,
       };
 
@@ -425,34 +359,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     const wsAll = XLSX.utils.json_to_sheet(allStudentsData);
     XLSX.utils.book_append_sheet(wb, wsAll, 'Tat_Ca');
 
-    rooms.forEach((roomName) => {
-      const roomStudents = processedStudents.filter((s) => s.room === roomName);
-      const excelData = roomStudents.map((st, idx) => {
-        const studentKey = String(st.studentId || st.id || idx);
-        const finalScore = calculateFinalScore(studentKey);
-        const studentScores = scores[studentKey] || {};
-
-        const row: Record<string, any> = {
-          'STT': idx + 1,
-          'MSV': st.studentId || st.id || '',
-          'Họ và Tên': st.name || '',
-          'Phòng': st.room || '',
-          'Điểm Nề Nếp': finalScore,
-        };
-
-        for (let day = 1; day <= 10; day++) {
-          row[`Ngày ${day}`] = (studentScores[day] || []).map((e) => e.displayCode).join(', ');
-        }
-        row['Ghi chú'] = notes[studentKey] || '';
-        return row;
-      });
-
-      const ws = XLSX.utils.json_to_sheet(excelData);
-      const safeSheetName = roomName.replace(/[\/?*[\]\\]/g, '_').substring(0, 31);
-      XLSX.utils.book_append_sheet(wb, ws, safeSheetName);
-    });
-
-    XLSX.writeFile(wb, `Cham_Diem_Ne_Nep_KTX_Tat_Ca_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    XLSX.writeFile(wb, `Cham_Diem_Ne_Nep_KTX_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
   return (
@@ -460,7 +367,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
       <div className="scoring-header">
         <div className="header-title-wrapper">
           <h2>
-            <ClipboardCheck color="#2563eb" size={24} /> Chấm Điểm Nề Nếp Theo Phòng
+            <ClipboardCheck color="#2563eb" size={24} /> Chấm Điểm Nề Nếp KTX
             {loading && <RefreshCw size={16} className="animate-spin" color="#2563eb" />}
           </h2>
           <p>Điểm khởi tạo ban đầu: 10 điểm</p>
@@ -472,7 +379,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
               <button onClick={() => setIsViolationModalOpen(true)} className="btn-export" style={{ backgroundColor: '#4f46e5', color: '#fff' }} title="Quản lý danh mục quy định lỗi">
                 <Settings size={16} /> Quản lý danh mục lỗi
               </button>
-              <button onClick={handleExportExcel} className="btn-export" title="Xuất file Excel gồm sheet Tất cả và chia theo từng phòng">
+              <button onClick={handleExportExcel} className="btn-export" title="Xuất file Excel">
                 <FileSpreadsheet size={16} /> Xuất Excel
               </button>
             </>
@@ -491,21 +398,43 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
         </div>
       </div>
 
-      <div className="room-tabs-container">
-        {roomList.map((roomName) => {
-          const isActive = selectedRoom === roomName;
-          return (
-            <button
-              key={roomName}
-              onClick={() => setSelectedRoom(roomName)}
-              className={`room-tab-btn ${isActive ? 'active' : ''}`}
-            >
-              <DoorClosed size={14} />
-              {roomName}
-              <span className="room-badge">{roomCounts[roomName] || 0}</span>
-            </button>
-          );
-        })}
+      {/* BỘ LỌC CHỌN PHÒNG VÀ GIẢNG VIÊN */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+        {/* Tab Phòng */}
+        <div className="room-tabs-container" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          <span style={{ alignSelf: 'center', fontWeight: 'bold', fontSize: '13px', color: '#475569', marginRight: '4px' }}>Phòng:</span>
+          {roomList.map((roomName) => {
+            const isActive = selectedRoom === roomName;
+            return (
+              <button
+                key={roomName}
+                onClick={() => setSelectedRoom(roomName)}
+                className={`room-tab-btn ${isActive ? 'active' : ''}`}
+              >
+                🏠 {roomName}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Tab Giảng viên */}
+        {teacherList.length > 1 && (
+          <div className="room-tabs-container" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <span style={{ alignSelf: 'center', fontWeight: 'bold', fontSize: '13px', color: '#475569', marginRight: '4px' }}>Giảng viên:</span>
+            {teacherList.map((teacherName) => {
+              const isActive = selectedTeacher === teacherName;
+              return (
+                <button
+                  key={teacherName}
+                  onClick={() => setSelectedTeacher(teacherName)}
+                  className={`room-tab-btn ${isActive ? 'active' : ''}`}
+                >
+                  👤 {teacherName || 'Chưa phân công'}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="main-layout">
@@ -518,6 +447,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
                   <th className="col-msv">MSV</th>
                   <th className="col-name">HỌ VÀ TÊN</th>
                   <th className="col-room">Phòng</th>
+                  <th className="col-room">Giảng viên</th>
                   <th className="th-score">Điểm nề nếp</th>
                   {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((day) => (
                     <th key={day} className="col-day">{day}</th>
@@ -528,8 +458,8 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
               <tbody>
                 {filteredStudents.length === 0 ? (
                   <tr>
-                    <td colSpan={16} style={{ padding: '24px', color: '#94a3b8' }}>
-                      Không có sinh viên nào trong danh sách
+                    <td colSpan={17} style={{ padding: '24px', color: '#94a3b8' }}>
+                      Không có sinh viên nào phù hợp với bộ lọc
                     </td>
                   </tr>
                 ) : (
@@ -543,6 +473,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
                         <td className="col-msv">{st.studentId || st.id}</td>
                         <td className="col-name">{st.name}</td>
                         <td className="col-room">{st.room}</td>
+                        <td className="col-room">{st.thayCo || ''}</td>
 
                         <td className={`col-total-score ${finalScore < 10 ? 'score-bad' : 'score-good'}`}>
                           {finalScore}
@@ -678,7 +609,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
               </div>
               <input
                 type="text"
-                placeholder="Tên mô tả chi tiết lỗi (VD: Vi phạm quy định uống rượu bia)"
+                placeholder="Tên mô tả chi tiết lỗi"
                 value={newLabel}
                 onChange={(e) => setNewLabel(e.target.value)}
                 style={{ width: '100%', padding: '8px', border: '1px solid #cbd5e1', borderRadius: '4px' }}

@@ -121,7 +121,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               fontSize: '14px', cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s',
             }}
           >
-            <Package size={18} /> Sinh Viên Mượn Đồ
+            <Package size={18} /> Sinh Viên Thuê Trang Phục
           </button>
 
           <button

@@ -20,7 +20,7 @@ export const AddStudent: React.FC<AddStudentProps> = ({ onAddStudents, currentUs
   const [parsedStudents, setParsedStudents] = useState<Student[]>([]);
   const [fileName, setFileName] = useState<string>('');
   
-  // State lưu tên thầy cô nhập trực tiếp trên giao diện
+  // State lưu tên thầy cô chọn từ danh sách dropdown
   const [thayCo, setThayCo] = useState<string>('');
 
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -329,7 +329,7 @@ export const AddStudent: React.FC<AddStudentProps> = ({ onAddStudents, currentUs
                 </div>
               </div>
 
-              {/* Ô NHẬP TÊN THẦY CÔ HIỂN THỊ NGAY KHI CÓ DỮ LIỆU XEM TRƯỚC */}
+              {/* Ô CHỌN TÊN THẦY CÔ DẠNG DANH SÁCH THẢ (SELECT) */}
               <div style={{
                 background: '#f8fafc',
                 padding: '14px 18px',
@@ -343,28 +343,33 @@ export const AddStudent: React.FC<AddStudentProps> = ({ onAddStudents, currentUs
                 <UserCheck size={20} color="#2563eb" />
                 <div style={{ flex: 1 }}>
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#475569', marginBottom: '4px' }}>
-                    Nhập tên Thầy / Cô phụ trách (sẽ áp dụng khi bấm Lưu vào CSDL):
+                    Chọn Thầy / Cô phụ trách (sẽ áp dụng khi bấm Lưu vào CSDL):
                   </label>
-                  <input
-                    type="text"
+                  <select
                     value={thayCo}
                     onChange={(e) => {
                       const val = e.target.value;
                       setThayCo(val);
                       setParsedStudents(prev => prev.map(item => ({ ...item, thayCo: val.trim() || null })));
                     }}
-                    placeholder="Ví dụ: Thầy Nguyễn Văn A..."
                     style={{
                       width: '100%',
-                      padding: '7px 10px',
+                      padding: '8px 12px',
                       borderRadius: '6px',
                       border: '1px solid #94a3b8',
                       outline: 'none',
                       fontSize: '14px',
                       boxSizing: 'border-box',
-                      background: '#ffffff'
+                      background: '#ffffff',
+                      cursor: 'pointer'
                     }}
-                  />
+                  >
+                    <option value="">-- Chọn Thầy/Cô phụ trách --</option>
+                    <option value="Lâm Văn Vũ">Lâm Văn Vũ</option>
+                    <option value="Cao Trần Trí">Cao Trần Trí</option>
+                    <option value="Trần Thị Hồng Huệ">Trần Thị Hồng Huệ</option>
+                    <option value="Nguyễn Thành Tín">Nguyễn Thành Tín</option>
+                  </select>
                 </div>
               </div>
 

@@ -211,6 +211,28 @@ export function App() {
     }
   };
 
+  const handleUpdateRoomData = async (roomAssignments: { studentKey: string; roomNumber: number }[]) => {
+    if (!canManage) return;
+
+    for (const item of roomAssignments) {
+      const targetStudent = students.find((s) => String(s.studentId || s.id).trim() === String(item.studentKey).trim());
+      if (!targetStudent) continue;
+
+      const mssvValue = targetStudent.studentId ? String(targetStudent.studentId).trim() : null;
+      const sttValue = targetStudent.id ? Number(targetStudent.id) : null;
+
+      let query = supabase.from('DanhSachSinhVien').update({ Phong: item.roomNumber });
+      
+      if (mssvValue && mssvValue !== 'undefined') {
+        query = query.eq('MSSV', mssvValue);
+      } else if (sttValue && !isNaN(sttValue)) {
+        query = query.eq('STT', sttValue);
+      }
+
+      await query;
+    }
+  };
+
   const handleSetRoomLeader = async (
     leaderStudentId: string | null,
     roomStudentKeys: string[],
@@ -412,6 +434,8 @@ export function App() {
                 students={students}
                 setStudents={setStudents}
                 onSetRoomLeader={handleSetRoomLeader}
+                onUpdateRoomData={handleUpdateRoomData}
+                currentUser={currentUser}
               />
             )}
 
