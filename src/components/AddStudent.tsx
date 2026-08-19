@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { Upload, FileSpreadsheet, CheckCircle, Trash2, AlertCircle, Info, Lock, UserCheck } from 'lucide-react';
+import { supabase } from '../supabaseClient'; // Đảm bảo đường dẫn đến file supabaseClient chính xác
 import type { Student } from '../types/student';
 import type { User } from '../types/auth';
 import './AddStudent.css';
@@ -20,6 +21,9 @@ export const AddStudent: React.FC<AddStudentProps> = ({ onAddStudents, currentUs
   const [parsedStudents, setParsedStudents] = useState<Student[]>([]);
   const [fileName, setFileName] = useState<string>('');
   
+  // State lưu danh sách họ tên giáo viên lấy từ cơ sở dữ liệu
+  const [teacherList, setTeacherList] = useState<string[]>([]);
+
   // State lưu tên thầy cô chọn từ danh sách dropdown
   const [thayCo, setThayCo] = useState<string>('');
 
@@ -38,6 +42,36 @@ export const AddStudent: React.FC<AddStudentProps> = ({ onAddStudents, currentUs
     }, 4000);
   };
 
+  // --- TỰ ĐỘNG GỌI API LẤY HỌ TÊN GIÁO VIÊN TỪ BẢNG User TRÊN SUPABASE ---
+  useEffect(() => {
+    const fetchTeachers = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('User')
+          .select('HoTen'); // Đã đổi thành 'HoTen' theo đúng tên cột trong CSDL của bạn
+
+        if (error) {
+          console.error('Lỗi khi tải danh sách giáo viên:', error);
+          showNotification('error', 'Không thể tải danh sách giáo viên từ cơ sở dữ liệu!');
+          return;
+        }
+
+        if (data) {
+          // Lọc các giá trị không bị rỗng và loại bỏ các tên bị trùng lặp
+          const names = data
+            .map((item: any) => item.HoTen) // Khớp với cột HoTen đã chọn ở trên
+            .filter((name: string) => name && name.trim() !== '');
+          
+          const uniqueNames = Array.from(new Set(names)) as string[];
+          setTeacherList(uniqueNames);
+        }
+      } catch (err) {
+        console.error('Lỗi kết nối:', err);
+      }
+    };
+
+    fetchTeachers();
+  }, []);
   const processExcelFile = (file: File) => {
     if (!canManage) {
       showNotification('error', 'Bạn không có quyền thực hiện thao tác này!');
@@ -329,7 +363,7 @@ export const AddStudent: React.FC<AddStudentProps> = ({ onAddStudents, currentUs
                 </div>
               </div>
 
-              {/* Ô CHỌN TÊN THẦY CÔ DẠNG DANH SÁCH THẢ (SELECT) */}
+              {/* Ô CHỌN TÊN THẦY CÔ LẤY TỪ DATABASE (SELECT) */}
               <div style={{
                 background: '#f8fafc',
                 padding: '14px 18px',
@@ -343,7 +377,7 @@ export const AddStudent: React.FC<AddStudentProps> = ({ onAddStudents, currentUs
                 <UserCheck size={20} color="#2563eb" />
                 <div style={{ flex: 1 }}>
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#475569', marginBottom: '4px' }}>
-                    Chọn Thầy / Cô phụ trách (sẽ áp dụng khi bấm Lưu vào CSDL):
+                    Chọn Thầy / Cô phụ trách (Lấy từ bảng User):
                   </label>
                   <select
                     value={thayCo}
@@ -364,11 +398,12 @@ export const AddStudent: React.FC<AddStudentProps> = ({ onAddStudents, currentUs
                       cursor: 'pointer'
                     }}
                   >
-                    <option value="">-- Chọn Thầy/Cô phụ trách --</option>
-                    <option value="Lâm Văn Vũ">Lâm Văn Vũ</option>
-                    <option value="Cao Trần Trí">Cao Trần Trí</option>
-                    <option value="Trần Thị Hồng Huệ">Trần Thị Hồng Huệ</option>
-                    <option value="Nguyễn Thành Tín">Nguyễn Thành Tín</option>
+                    <option value="">-- Chọn Thầy/Cô phụ trách từ CSDL --</option>
+                    {teacherList.map((name, index) => (
+                      <option key={index} value={name}>
+                        {name}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
