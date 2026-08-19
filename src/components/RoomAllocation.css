@@ -1,0 +1,232 @@
+.room-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-sizing: border-box;
+}
+
+.room-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #ffffff;
+  padding: 20px;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.room-header h2 {
+  margin: 0;
+  font-size: 20px;
+  color: #0f172a;
+}
+
+.room-header p {
+  margin: 4px 0 0 0;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.room-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.stat-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #1e40af;
+  white-space: nowrap;
+}
+
+.stat-card.warning {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+/* LƯỚI 20 PHÒNG */
+.rooms-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.room-card {
+  position: relative; /* CỰC KỲ QUAN TRỌNG: Giúp dropdown định vị chuẩn góc thẻ phòng */
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+  transition: all 0.2s ease;
+  box-sizing: border-box;
+}
+
+.room-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.06);
+}
+
+.room-card.empty {
+  opacity: 0.5;
+  background: #f8fafc;
+}
+
+.room-card.penalized-room {
+  border-color: #fca5a5;
+  background: #fff5f5;
+}
+
+.room-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.room-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 15px;
+  color: #1e293b;
+}
+
+.gender-tag {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.gender-tag.nu {
+  background: #fce7f3;
+  color: #be185d;
+}
+
+.gender-tag.nam {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.room-capacity {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.status-pill {
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.status-pill.full { color: #dc2626; }
+.status-pill.available { color: #16a34a; }
+.status-pill.free { color: #94a3b8; }
+
+.progress-bar-bg {
+  height: 6px;
+  background: #e2e8f0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.room-student-list {
+  margin-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.empty-text {
+  text-align: center;
+  font-size: 12px;
+  color: #94a3b8;
+  padding: 12px 0;
+}
+
+.student-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  background: #f8fafc;
+  border-radius: 6px;
+  font-size: 12px;
+  gap: 6px;
+}
+
+.student-item.bad-student {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.st-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 170px;
+}
+
+.tag-bad {
+  background: #ef4444;
+  color: #fff;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tag-bad.late {
+  background: #f59e0b;
+}
+
+/* ==================== TỐI ƯU CHO ĐIỆN THOẠI (MOBILE) ==================== */
+@media screen and (max-width: 768px) {
+  .room-header {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 16px;
+  }
+
+  .room-stats {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .stat-card {
+    justify-content: center;
+  }
+
+  .rooms-grid {
+    grid-template-columns: 100%;
+  }
+
+  .st-name {
+    max-width: 150px;
+  }
+}

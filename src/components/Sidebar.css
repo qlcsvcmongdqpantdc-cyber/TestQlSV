@@ -1,0 +1,218 @@
+/* ==========================================
+   1. KHUNG TỔNG THỂ SIDEBAR (DÙNG CHUNG)
+   ========================================== */
+.sidebar-container {
+  width: 260px;
+  min-width: 260px;
+  height: 100vh;
+  background-color: #1e293b; /* Tông màu tối hiện đại (Slate Dark) */
+  color: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 24px 16px;
+  box-sizing: border-box;
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.1);
+  
+  /* Cố định bên trái màn hình trên Máy tính */
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 100;
+  transition: all 0.3s ease-in-out;
+  overflow-y: auto; /* Cho phép cuộn menu nếu màn hình PC quá thấp */
+}
+
+/* 2. HEADER BRAND */
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 8px 24px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 20px;
+}
+
+.sidebar-title {
+  color: #ffffff;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+/* 3. MENU ĐIỀU HƯỚNG NAV */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Style chung cho nút chuyển Tab */
+.sidebar-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+  text-align: left;
+}
+
+.sidebar-btn:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+
+/* Nút đang Active */
+.sidebar-btn.active {
+  background-color: #2563eb; /* Xanh primary nổi bật */
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+/* Nút Admin đặc biệt */
+.sidebar-btn.admin-btn {
+  margin-top: 8px;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+}
+
+.sidebar-btn.admin-btn:hover {
+  background: rgba(251, 191, 36, 0.15);
+}
+
+.sidebar-btn.admin-btn.active {
+  background: #d97706;
+  border-color: #d97706;
+}
+
+.sidebar-btn.admin-btn.active span {
+  color: #ffffff !important;
+}
+
+/* 4. KHU VỰC FOOTER & USER PROFILE */
+.sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Thẻ thông tin tài khoản */
+.user-profile-box {
+  background: rgba(255, 255, 255, 0.04);
+  padding: 12px;
+  border-radius: 8px;
+  text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.user-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f1f5f9;
+  margin-bottom: 2px;
+}
+
+.user-role {
+  font-size: 12px;
+  color: #93c5fd;
+}
+
+/* 5. NÚT ĐĂNG XUẤT */
+.logout-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  background-color: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+  outline: none;
+}
+
+.logout-btn:hover {
+  background-color: #ef4444;
+  color: #ffffff;
+  border-color: #ef4444;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
+}
+
+.logout-btn:active {
+  transform: scale(0.98);
+}
+
+/* Bản quyền */
+.copyright-text {
+  font-size: 11px;
+  color: #64748b;
+  text-align: center;
+  margin-top: 4px;
+}
+
+
+/* ==========================================
+   6. TỐI ƯU CHO ĐIỆN THOẠI (MOBILE RESPONSIVE)
+   ========================================== */
+/* ==========================================
+   TỐI ƯU CHO ĐIỆN THOẠI: ẨN SIDEBAR THÀNH NÚT 3 GẠCH
+   ========================================== */
+
+/* Mặc định trên máy tính thì nút 3 gạch ẩn đi */
+.mobile-menu-toggle {
+  display: none !important;
+}
+
+@media screen and (max-width: 768px) {
+  /* 1. Ẩn Sidebar ra ngoài màn hình bên trái theo mặc định */
+  .sidebar-container {
+    position: fixed !important;
+    top: 0;
+    left: -100% !important; /* Đẩy ra ngoài, ẩn đi */
+    width: 260px !important;
+    height: 100vh !important;
+    z-index: 1000 !important;
+    transition: left 0.3s ease-in-out !important;
+    box-shadow: 5px 0 20px rgba(0, 0, 0, 0.4) !important;
+  }
+
+  /* Khi có class 'open' (tức là khi bấm nút 3 gạch), nó trượt vào trong */
+  .sidebar-container.open {
+    left: 0 !important;
+  }
+
+  /* 2. Hiển thị nút 3 gạch trên điện thoại */
+  .mobile-menu-toggle {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    z-index: 1100;
+    width: 42px;
+    height: 42px;
+    background-color: #1e293b;
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    font-size: 22px;
+    cursor: pointer;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+  }
+}

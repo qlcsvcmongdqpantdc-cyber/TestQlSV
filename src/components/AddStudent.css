@@ -1,0 +1,270 @@
+.add-student-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.page-header h2 {
+  margin: 0;
+  font-size: 22px;
+  color: #0f172a;
+}
+
+.page-header p {
+  margin: 4px 0 0 0;
+  color: #64748b;
+  font-size: 14px;
+}
+
+/* KHU VỰC DROPZONE KÉO THẢ */
+.dropzone {
+  border: 2px dashed #94a3b8;
+  border-radius: 12px;
+  background-color: #ffffff;
+  padding: 30px 20px;
+  text-align: center;
+  transition: all 0.2s ease-in-out;
+  cursor: pointer;
+}
+
+.dropzone:hover,
+.dropzone.dragging {
+  border-color: #2563eb;
+  background-color: #eff6ff;
+}
+
+.dropzone-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.icon-excel {
+  color: #16a34a;
+}
+
+.dropzone-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 15px;
+  color: #334155;
+}
+
+.dropzone-text u {
+  color: #2563eb;
+}
+
+.file-hint {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+/* BẢNG XEM TRƯỚC PREVIEW */
+.preview-section {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #1e293b;
+  word-break: break-all;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-cancel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  border-radius: 6px;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.btn-cancel:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.btn-save {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border: none;
+  background: #2563eb;
+  color: #ffffff;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
+}
+
+.btn-save:hover {
+  background: #1d4ed8;
+}
+
+.btn-save:disabled,
+.btn-cancel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* KHUNG TẠO BẢNG CÓ THANH CUỘN DỰA TRÊN CHIỀU CAO MÀN HÌNH */
+.table-wrapper {
+  height: 420px;
+  overflow-y: scroll !important;
+  overflow-x: auto !important; /* Hỗ trợ cuộn ngang trên điện thoại */
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  position: relative;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* TÙY CHỈNH THANH CUỘN (SCROLLBAR) NỔI BẬT DỄ KÉO */
+.table-wrapper::-webkit-scrollbar {
+  width: 8px;
+  height: 8px; /* Hỗ trợ thanh cuộn ngang */
+}
+
+.table-wrapper::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 0 8px 8px 0;
+}
+
+.table-wrapper::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 5px;
+}
+
+.table-wrapper::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* BẢNG DỮ LIỆU */
+.excel-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap; /* Giúp các cột không bị bẻ chữ xấu */
+}
+
+/* TIÊU ĐỀ BẢNG ĐỨNG YÊN KHI CUỘN SUỐNG */
+.excel-table th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 600;
+  padding: 12px 14px;
+  border-bottom: 2px solid #cbd5e1;
+}
+
+.excel-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  color: #334155;
+}
+
+.excel-table tbody tr:hover {
+  background-color: #f1f5f9;
+}
+
+.mssv-text {
+  color: #2563eb;
+  font-family: monospace;
+}
+
+.gender-badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.gender-badge.male {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.gender-badge.female {
+  background: #fce7f3;
+  color: #be185d;
+}
+
+
+/* ==================== TỐI ƯU GIAO DIỆN ĐIỆN THOẠI (MOBILE) ==================== */
+@media screen and (max-width: 768px) {
+  .add-student-container {
+    padding: 0;
+    gap: 14px;
+  }
+
+  .preview-section {
+    padding: 12px;
+  }
+
+  .preview-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .actions {
+    display: flex;
+    width: 100%;
+  }
+
+  .btn-cancel, 
+  .btn-save {
+    flex: 1;
+    justify-content: center;
+    padding: 10px;
+    font-size: 14px;
+  }
+
+  .dropzone {
+    padding: 24px 14px;
+  }
+
+  .dropzone-text {
+    font-size: 14px;
+  }
+
+  /* Giảm nhẹ chiều cao bảng trên màn hình mobile nhỏ để vừa vặn hơn */
+  .table-wrapper {
+    height: 360px;
+  }
+}

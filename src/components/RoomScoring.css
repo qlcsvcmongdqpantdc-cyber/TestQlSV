@@ -1,0 +1,334 @@
+/* --- RESET & TỔNG QUAN --- */
+.scoring-container {
+  padding: 16px;
+  background-color: #f8fafc;
+  min-height: 100vh;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  box-sizing: border-box;
+}
+
+.scoring-container * {
+  box-sizing: border-box;
+}
+
+/* --- HEADER --- */
+.scoring-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.header-title-wrapper h2 {
+  margin: 0;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.25rem;
+}
+
+.header-title-wrapper p {
+  margin: 4px 0 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* --- NÚT BẤM & INPUT --- */
+.btn-export {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background-color: #16a34a;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.btn-export:hover {
+  background-color: #15803d;
+}
+
+.search-box {
+  position: relative;
+}
+
+.search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94a3b8;
+}
+
+.search-input {
+  padding: 8px 12px 8px 32px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  font-size: 14px;
+  outline: none;
+  width: 180px;
+  transition: width 0.2s, border-color 0.2s;
+}
+
+.search-input:focus {
+  border-color: #2563eb;
+  width: 220px;
+}
+
+/* --- THANH TABS PHÒNG (SCROLL NGANG) --- */
+.room-tabs-container {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: 16px;
+  border-bottom: 2px solid #e2e8f0;
+  scrollbar-width: thin; /* Hỗ trợ Firefox */
+}
+
+.room-tabs-container::-webkit-scrollbar {
+  height: 6px;
+}
+
+.room-tabs-container::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 4px;
+}
+
+.room-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid #cbd5e1;
+  border-bottom-width: 1px;
+  background-color: #f1f5f9;
+  color: #475569;
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.room-tab-btn.active {
+  background-color: #ffffff;
+  color: #2563eb;
+  font-weight: 600;
+  border-bottom: 3px solid #2563eb;
+  border-color: #cbd5e1 #cbd5e1 #2563eb #cbd5e1;
+}
+
+.room-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.room-tab-btn.active .room-badge {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.room-tab-btn:not(.active) .room-badge {
+  background: #e2e8f0;
+  color: #64748b;
+}
+
+/* --- LAYOUT CHÍNH (GRID) --- */
+.main-layout {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 16px;
+  align-items: start;
+}
+
+/* --- BẢNG DỮ LIỆU --- */
+.table-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.table-responsive-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.scoring-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.scoring-table th,
+.scoring-table td {
+  padding: 8px 6px;
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.scoring-table th {
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 600;
+}
+
+.th-score {
+  background: #e0f2fe !important;
+  color: #0369a1 !important;
+}
+
+.col-stt { width: 35px; }
+.col-msv { width: 90px; font-weight: 600; }
+.col-name { text-align: left !important; font-weight: 500; min-width: 140px; }
+.col-room { width: 80px; color: #2563eb; font-weight: 600; }
+.col-total-score { font-weight: 700; font-size: 14px; }
+.col-day { width: 40px; }
+.col-note { width: 110px; }
+
+/* Trạng thái điểm tổng */
+.score-bad {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.score-good {
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
+/* Thẻ lỗi vi phạm trong ô ngày */
+.violation-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: #ef4444;
+  background: #fee2e2;
+  padding: 1px 4px;
+  border-radius: 2px;
+  cursor: pointer;
+  display: inline-block;
+  margin-bottom: 1px;
+}
+
+.violation-select {
+  border: none;
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+  color: #94a3b8;
+  outline: none;
+  text-align: center;
+  width: 100%;
+}
+
+.note-input {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 11px;
+  outline: none;
+}
+
+.note-input:focus {
+  border-color: #2563eb;
+}
+
+/* --- CỘT QUY ĐỊNH BÊN PHẢI --- */
+.rules-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.rules-title {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rules-content {
+  font-size: 13px;
+  color: #334155;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rule-group div {
+  padding-left: 8px;
+  margin-top: 4px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+/* --- RESPONSIVE CHO ĐIỆN THOẠI (MOBILE OPTIMIZATION) --- */
+@media screen and (max-width: 900px) {
+  .main-layout {
+    grid-template-columns: 1fr; /* Chuyển từ 2 cột sang 1 cột xếp dọc */
+  }
+
+  .scoring-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .header-actions {
+    justify-content: space-between;
+  }
+
+  .search-input {
+    width: 100%;
+  }
+
+  .search-input:focus {
+    width: 100%;
+  }
+
+  .btn-export {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+@media screen and (max-width: 480px) {
+  .scoring-container {
+    padding: 8px; /* Giảm padding trên màn hình cực nhỏ */
+  }
+
+  .header-title-wrapper h2 {
+    font-size: 1.1rem;
+  }
+
+  .scoring-table {
+    font-size: 12px;
+  }
+}
