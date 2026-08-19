@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ClipboardCheck, Search, ShieldAlert, RefreshCw, FileSpreadsheet, Settings, Trash2, Plus } from 'lucide-react';
+import { ClipboardCheck, Search, ShieldAlert, RefreshCw, FileSpreadsheet, Settings, Trash2, Plus, Filter } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../supabaseClient';
 import type { Student } from '../types/student';
@@ -399,7 +399,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
       </div>
 
       {/* BỘ LỌC CHỌN PHÒNG VÀ GIẢNG VIÊN */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
         {/* Tab Phòng */}
         <div className="room-tabs-container" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <span style={{ alignSelf: 'center', fontWeight: 'bold', fontSize: '13px', color: '#475569', marginRight: '4px' }}>Phòng:</span>
@@ -417,22 +417,34 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
           })}
         </div>
 
-        {/* Tab Giảng viên */}
+        {/* Dropdown chọn Giảng viên */}
         {teacherList.length > 1 && (
-          <div className="room-tabs-container" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-            <span style={{ alignSelf: 'center', fontWeight: 'bold', fontSize: '13px', color: '#475569', marginRight: '4px' }}>Giảng viên:</span>
-            {teacherList.map((teacherName) => {
-              const isActive = selectedTeacher === teacherName;
-              return (
-                <button
-                  key={teacherName}
-                  onClick={() => setSelectedTeacher(teacherName)}
-                  className={`room-tab-btn ${isActive ? 'active' : ''}`}
-                >
-                  👤 {teacherName || 'Chưa phân công'}
-                </button>
-              );
-            })}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#fff', padding: '10px 14px', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', width: 'fit-content' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: '13px', color: '#475569' }}>
+              <Filter size={16} />
+              <span>Giảng viên:</span>
+            </div>
+            <select
+              value={selectedTeacher}
+              onChange={(e) => setSelectedTeacher(e.target.value)}
+              style={{
+                padding: '6px 12px',
+                border: '1px solid #cbd5e1',
+                borderRadius: '6px',
+                fontSize: '13px',
+                outline: 'none',
+                minWidth: '240px',
+                background: '#f8fafc',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="Tất cả">-- Tất cả Thầy/Cô --</option>
+              {teacherList.filter(t => t !== 'Tất cả').map((teacherName) => (
+                <option key={teacherName} value={teacherName}>
+                  {teacherName}
+                </option>
+              ))}
+            </select>
           </div>
         )}
       </div>
