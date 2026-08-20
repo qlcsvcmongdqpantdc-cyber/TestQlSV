@@ -52,10 +52,39 @@ export function ManageStudents({
   const absentCount = students.filter((s) => s.isAbsent).length;
   const lateCount = students.filter((s) => s.isLate).length;
   const borrowCount = students.filter((s: any) => s.isBorrow).length;
-  
+
   // 🌟 TÍNH SỐ LƯỢNG HIỆN DIỆN (TỔNG TRỪ VẮNG)
   const presentCount = totalStudents - absentCount;
 
+  // 🌟 XỬ LÝ CLICK CHECKBOX ĐI TRỄ KÈM CẬP NHẬT CSDL SUPABASE CHO CỘT 'late_at'
+  const handleLateChange = async (student: Student) => {
+    if (!canManage) return;
+
+    const targetId = student.id || student.studentId;
+    const nextIsLate = !student.isLate;
+    const currentTime = nextIsLate ? new Date().toISOString() : null;
+    const diTreVal = nextIsLate ? 'x' : null; // Lưu 'x' vào cột DiTre giống cách dùng MuonDo
+
+    // 1. Gọi hàm thay đổi state ở component cha
+    onToggleAttendance(targetId, 'isLate');
+
+    try {
+      // 2. Cập nhật đúng tên cột trong cơ sở dữ liệu của bạn: DiTre và late_at
+      const { error } = await supabase
+        .from('DanhSachSinhVien')
+        .update({
+          DiTre: diTreVal,
+          late_at: currentTime,
+        })
+        .eq('MSSV', student.studentId); // Khớp với cột MSSV trong bảng
+
+      if (error) {
+        console.error('Lỗi cập nhật late_at lên Supabase:', error.message);
+      }
+    } catch (err) {
+      console.error('Lỗi kết nối Supabase khi cập nhật trạng thái trễ:', err);
+    }
+  };
   // 🌟 SAO LƯU DỮ LIỆU SANG 'KhoaHocDaKetThuc' RỒI MỚI XÓA BẢNG 'DanhSachSinhVien'
   const handleConfirmEndCourse = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -263,7 +292,7 @@ export function ManageStudents({
                         type="checkbox"
                         checked={student.isLate || false}
                         disabled={!canManage}
-                        onChange={() => canManage && onToggleAttendance(student.id || student.studentId, 'isLate')}
+                        onChange={() => handleLateChange(student)}
                         className="checkbox-late"
                         style={{ cursor: canManage ? 'pointer' : 'not-allowed' }}
                       />
@@ -291,7 +320,7 @@ export function ManageStudents({
         <div className="modal-overlay">
           <div className="modal-card">
             <div className="modal-header-icon">🎓</div>
-            
+
             <div className="modal-header">
               <div>
                 <h3 className="modal-title">Kết Thúc Khóa Học</h3>
@@ -374,18 +403,18 @@ export function ManageStudents({
       {showSuccessModal && (
         <div className="modal-overlay">
           <div className="modal-card" style={{ textAlign: 'center' }}>
-            <div 
-              style={{ 
-                width: '64px', 
-                height: '64px', 
-                backgroundColor: '#dcfce7', 
-                color: '#16a34a', 
-                borderRadius: '50%', 
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'center', 
-                fontSize: '32px', 
-                margin: '0 auto 16px auto' 
+            <div
+              style={{
+                width: '64px',
+                height: '64px',
+                backgroundColor: '#dcfce7',
+                color: '#16a34a',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '32px',
+                margin: '0 auto 16px auto'
               }}
             >
               ✓
@@ -394,7 +423,7 @@ export function ManageStudents({
             <h3 style={{ fontSize: '20px', fontWeight: '800', color: '#0f172a', margin: '0 0 8px 0' }}>
               Kết Thúc Khóa Học Thành Công!
             </h3>
-            
+
             <p style={{ fontSize: '14px', color: '#64748b', margin: '0 0 20px 0', lineHeight: '1.5' }}>
               Đã sao lưu thông tin <strong>{dot} - {hocKy} - {namHoc}</strong> vào kho Lịch Sử và làm sạch bảng hiện tại.
             </p>

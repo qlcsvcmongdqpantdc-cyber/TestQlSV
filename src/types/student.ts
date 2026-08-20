@@ -13,6 +13,7 @@ export interface Student {
   truongPhong?: string | null;
   ghiChu?: string | null;
   thayCo?: string | null; // <--- THÊM DÒNG NÀY VÀO
+  late_at?: number | string | null;
 }
 
 export type TabType = 'add' | 'manage' | 'rooms' | 'scoring' | 'history' | 'users' | 'borrow-list';

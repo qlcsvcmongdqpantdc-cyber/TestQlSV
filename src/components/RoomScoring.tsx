@@ -329,12 +329,14 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
   }, [processedStudents, selectedRoom, selectedTeacher, searchTerm]);
 
   const handleExportExcel = () => {
-    const wb = XLSX.utils.book_new();
-    if (processedStudents.length === 0) {
+    if (!processedStudents || processedStudents.length === 0) {
       alert('Không có dữ liệu sinh viên để xuất Excel!');
       return;
     }
 
+    const wb = XLSX.utils.book_new();
+
+    // 1. Xuất sheet tổng hợp tất cả sinh viên
     const allStudentsData = processedStudents.map((st, idx) => {
       const studentKey = String(st.studentId || st.id || idx);
       const finalScore = calculateFinalScore(studentKey);
@@ -359,6 +361,43 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     const wsAll = XLSX.utils.json_to_sheet(allStudentsData);
     XLSX.utils.book_append_sheet(wb, wsAll, 'Tat_Ca');
 
+    // 2. Logic tách sheet theo từng phòng
+    const rooms = roomList.filter(r => r !== 'Tất cả');
+
+    rooms.forEach((roomName) => {
+      const studentsInRoom = processedStudents.filter(st => st.room === roomName);
+      
+      if (studentsInRoom.length > 0) {
+        const roomData = studentsInRoom.map((st, idx) => {
+          const studentKey = String(st.studentId || st.id || idx);
+          const finalScore = calculateFinalScore(studentKey);
+          const studentScores = scores[studentKey] || {};
+
+          const row: Record<string, any> = {
+            'STT': idx + 1,
+            'MSV': st.studentId || st.id || '',
+            'Họ và Tên': st.name || '',
+            'Phòng': st.room || '',
+            'Giảng viên': st.thayCo || '',
+            'Điểm Nề Nếp': finalScore,
+          };
+
+          for (let day = 1; day <= 10; day++) {
+            row[`Ngày ${day}`] = (studentScores[day] || []).map((e) => e.displayCode).join(', ');
+          }
+          row['Ghi chú'] = notes[studentKey] || '';
+          return row;
+        });
+
+        const wsRoom = XLSX.utils.json_to_sheet(roomData);
+        
+        // Đặt tên sheet an toàn (giới hạn 31 ký tự, loại bỏ ký tự đặc biệt của Excel)
+        const safeSheetName = `Phong_${roomName}`.replace(/[\/\\?\*:[\]]/g, '_').substring(0, 31);
+        XLSX.utils.book_append_sheet(wb, wsRoom, safeSheetName);
+      }
+    });
+
+    // 3. Tải file Excel về máy
     XLSX.writeFile(wb, `Cham_Diem_Ne_Nep_KTX_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 

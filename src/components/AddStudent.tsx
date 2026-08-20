@@ -20,7 +20,7 @@ interface Notification {
 export const AddStudent: React.FC<AddStudentProps> = ({ onAddStudents, currentUser }) => {
   const [parsedStudents, setParsedStudents] = useState<Student[]>([]);
   const [fileName, setFileName] = useState<string>('');
-  
+
   // State lưu danh sách họ tên giáo viên lấy từ cơ sở dữ liệu
   const [teacherList, setTeacherList] = useState<string[]>([]);
 
@@ -61,7 +61,7 @@ export const AddStudent: React.FC<AddStudentProps> = ({ onAddStudents, currentUs
           const names = data
             .map((item: any) => item.HoTen) // Khớp với cột HoTen đã chọn ở trên
             .filter((name: string) => name && name.trim() !== '');
-          
+
           const uniqueNames = Array.from(new Set(names)) as string[];
           setTeacherList(uniqueNames);
         }
@@ -225,7 +225,7 @@ export const AddStudent: React.FC<AddStudentProps> = ({ onAddStudents, currentUs
       return;
     }
     if (parsedStudents.length === 0) return;
-    
+
     setLoading(true);
     try {
       const studentsWithThayCo = parsedStudents.map(st => ({
@@ -265,21 +265,20 @@ export const AddStudent: React.FC<AddStudentProps> = ({ onAddStudents, currentUs
               notification.type === 'success'
                 ? '#f0fdf4'
                 : notification.type === 'error'
-                ? '#fef2f2'
-                : '#eff6ff',
-            border: `1px solid ${
-              notification.type === 'success'
+                  ? '#fef2f2'
+                  : '#eff6ff',
+            border: `1px solid ${notification.type === 'success'
                 ? '#bbf7d0'
                 : notification.type === 'error'
-                ? '#fecaca'
-                : '#bfdbfe'
-            }`,
+                  ? '#fecaca'
+                  : '#bfdbfe'
+              }`,
             color:
               notification.type === 'success'
                 ? '#166534'
                 : notification.type === 'error'
-                ? '#991b1b'
-                : '#1e40af',
+                  ? '#991b1b'
+                  : '#1e40af',
             animation: 'fadeInOut 0.3s ease-in-out',
             fontWeight: '600',
             fontSize: '14px',

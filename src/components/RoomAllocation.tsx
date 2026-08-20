@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Home, Users, AlertTriangle, ShieldCheck, Crown, UserCheck, Filter } from 'lucide-react';
 import type { Student } from '../types/student';
 import type { User } from '../types/auth';
@@ -9,8 +9,8 @@ interface Room {
   students: Student[];
   genderType: 'Nữ' | 'Nam' | 'Trống';
   hasPenalized: boolean;
-  matchedStudents?: Student[]; // Thêm tùy chọn này
-  hasMatch?: boolean;          // Thêm tùy chọn này
+  matchedStudents?: Student[];
+  hasMatch?: boolean;
 }
 
 interface RoomAllocationProps {
@@ -30,40 +30,49 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const MAX_PER_ROOM = 12;
   const INITIAL_ROOMS = 20;
 
-  const [leaders, setLeaders] = useState<Record<number, string>>({});
   const [activeDropdownRoom, setActiveDropdownRoom] = useState<number | null>(null);
-  
-  // State lọc theo Thầy/Cô phụ trách
   const [selectedTeacherFilter, setSelectedTeacherFilter] = useState<string>('');
 
-  // Danh sách thầy cô (bạn có thể tuỳ chỉnh hoặc trích xuất động từ danh sách sinh viên)
   const teacherList = ['Lâm Văn Vũ', 'Cao Trần Trí', 'Trần Thị Hồng Huệ', 'Nguyễn Thành Tín'];
 
-  // Ép mặc định là true nếu chưa truyền user để hiển thị nút quản lý luôn
   const canManage = currentUser 
     ? (currentUser.role === 'admin' || currentUser.can_manage === true) 
     : true;
 
-  // --- THUẬT TOÁN SẮP XẾP PHÒNG ---
-  const calculateRoomAllocation = (): Room[] => {
+  // --- THUẬT TOÁN SẮP XẾP PHÒNG (Tối ưu bằng useMemo) ---
+  const rooms = useMemo(() => {
     const activeStudents = students.filter((s) => !s.isAbsent);
 
-    const females = activeStudents.filter((s) => s.gender === 'Nữ');
-    const femaleRegular = females.filter((s) => !s.isLate);
-    const femaleLate = females.filter((s) => s.isLate);
-    const sortedFemales = [...femaleRegular, ...femaleLate];
+    const sortWithinGender = (group: Student[]) => {
+      const regular = group.filter((s) => !s.isLate);
+      const late = group
+        .filter((s) => s.isLate)
+        .sort((a, b) => {
+          const timeA = a.late_at ? new Date(a.late_at).getTime() : 0;
+          const timeB = b.late_at ? new Date(b.late_at).getTime() : 0;
 
-    const males = activeStudents.filter((s) => s.gender !== 'Nữ');
-    const maleRegular = males.filter((s) => !s.isLate);
-    const maleLate = males.filter((s) => s.isLate);
-    const sortedMales = [...maleRegular, ...maleLate];
+          // 1. Nếu thời gian trễ khác nhau, sắp xếp theo thời gian tăng dần
+          if (timeA !== timeB) {
+            return timeA - timeB;
+          }
+
+          // 2. Nếu thời gian trễ bằng nhau, sắp xếp theo MSSV tăng dần để tránh dồn ứ bất thường
+          const idA = String(a.studentId || a.id || '');
+          const idB = String(b.studentId || b.id || '');
+          return idA.localeCompare(idB);
+        });
+      return [...regular, ...late];
+    };
+
+    const sortedFemales = sortWithinGender(activeStudents.filter((s) => s.gender === 'Nữ'));
+    const sortedMales = sortWithinGender(activeStudents.filter((s) => s.gender !== 'Nữ'));
 
     let totalRoomsNeeded = Math.ceil(activeStudents.length / MAX_PER_ROOM);
     if (totalRoomsNeeded < INITIAL_ROOMS) {
       totalRoomsNeeded = INITIAL_ROOMS;
     }
 
-    const rooms: Room[] = Array.from({ length: totalRoomsNeeded }, (_, i) => ({
+    const generatedRooms: Room[] = Array.from({ length: totalRoomsNeeded }, (_, i) => ({
       roomNumber: i + 1,
       students: [],
       genderType: 'Trống',
@@ -76,28 +85,28 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       if (group.length === 0) return;
 
       if (
-        rooms[currentRoomIdx].students.length > 0 &&
-        (rooms[currentRoomIdx].genderType !== gender ||
-          rooms[currentRoomIdx].students.length >= MAX_PER_ROOM)
+        generatedRooms[currentRoomIdx].students.length > 0 &&
+        (generatedRooms[currentRoomIdx].genderType !== gender ||
+          generatedRooms[currentRoomIdx].students.length >= MAX_PER_ROOM)
       ) {
         currentRoomIdx++;
       }
 
       for (const student of group) {
-        if (currentRoomIdx >= rooms.length) {
-          rooms.push({
-            roomNumber: rooms.length + 1,
+        if (currentRoomIdx >= generatedRooms.length) {
+          generatedRooms.push({
+            roomNumber: generatedRooms.length + 1,
             students: [],
             genderType: 'Trống',
             hasPenalized: false,
           });
         }
 
-        if (rooms[currentRoomIdx].students.length >= MAX_PER_ROOM) {
+        if (generatedRooms[currentRoomIdx].students.length >= MAX_PER_ROOM) {
           currentRoomIdx++;
-          if (currentRoomIdx >= rooms.length) {
-            rooms.push({
-              roomNumber: rooms.length + 1,
+          if (currentRoomIdx >= generatedRooms.length) {
+            generatedRooms.push({
+              roomNumber: generatedRooms.length + 1,
               students: [],
               genderType: 'Trống',
               hasPenalized: false,
@@ -105,15 +114,15 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           }
         }
 
-        rooms[currentRoomIdx].students.push(student);
-        rooms[currentRoomIdx].genderType = gender;
+        generatedRooms[currentRoomIdx].students.push(student);
+        generatedRooms[currentRoomIdx].genderType = gender;
         
         if (student.isLate) {
-          rooms[currentRoomIdx].hasPenalized = true;
+          generatedRooms[currentRoomIdx].hasPenalized = true;
         }
       }
 
-      if (rooms[currentRoomIdx].students.length > 0) {
+      if (generatedRooms[currentRoomIdx].students.length > 0) {
         currentRoomIdx++;
       }
     };
@@ -121,23 +130,34 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     fillGroupToRooms(sortedFemales, 'Nữ');
     fillGroupToRooms(sortedMales, 'Nam');
 
-    return rooms;
-  };
+    return generatedRooms;
+  }, [students]);
 
-  const rooms = calculateRoomAllocation();
+  // --- QUẢN LÝ TRƯỞNG PHÒNG TRỰC TIẾP TỪ DỮ LIỆU STUDENTS ---
+  const leaders = useMemo(() => {
+    const loadedLeaders: Record<number, string> = {};
+    rooms.forEach((room) => {
+      const leaderStudent = room.students.find((st) => st.truongPhong === 'x');
+      if (leaderStudent) {
+        const studentKey = String(leaderStudent.studentId || leaderStudent.id);
+        loadedLeaders[room.roomNumber] = studentKey;
+      }
+    });
+    return loadedLeaders;
+  }, [rooms]);
 
-  // --- LỌC PHÒNG THEO THẦY CÔ ---
-  const filteredRooms = rooms.map((room) => {
-    if (!selectedTeacherFilter) return room;
-    const matchedStudents = room.students.filter((st) => st.thayCo === selectedTeacherFilter);
-    return {
-      ...room,
-      matchedStudents,
-      hasMatch: matchedStudents.length > 0
-    };
-  }).filter((room) => !selectedTeacherFilter || room.hasMatch);
+  const filteredRooms = useMemo(() => {
+    return rooms.map((room) => {
+      if (!selectedTeacherFilter) return room;
+      const matchedStudents = room.students.filter((st) => st.thayCo === selectedTeacherFilter);
+      return {
+        ...room,
+        matchedStudents,
+        hasMatch: matchedStudents.length > 0
+      };
+    }).filter((room) => !selectedTeacherFilter || room.hasMatch);
+  }, [rooms, selectedTeacherFilter]);
 
-  // --- ĐỒNG BỘ DỮ LIỆU PHÒNG XUỐNG DB ---
   useEffect(() => {
     if (!onUpdateRoomData) return;
 
@@ -150,25 +170,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     });
 
     onUpdateRoomData(assignments);
-  }, [students]);
+  }, [rooms, onUpdateRoomData]);
 
-  // --- TẢI TRƯỞNG PHÒNG SẴN CÓ TỪ DỮ LIỆU SINH VIÊN ---
-  useEffect(() => {
-    const loadedLeaders: Record<number, string> = {};
-    rooms.forEach((room) => {
-      const leaderStudent = room.students.find((st) => st.truongPhong === 'x');
-      if (leaderStudent) {
-        const studentKey = String(leaderStudent.studentId || leaderStudent.id);
-        loadedLeaders[room.roomNumber] = studentKey;
-      }
-    });
-    setLeaders(loadedLeaders);
-  }, [students]);
-
-  // --- HÀM XỬ LÝ CHỌN TRƯỞNG PHÒNG ---
   const handleSelectLeader = (roomNumber: number, studentKey: string) => {
     if (!canManage) return;
-    setLeaders((prev) => ({ ...prev, [roomNumber]: studentKey }));
     setActiveDropdownRoom(null);
 
     const currentRoom = rooms.find((r) => r.roomNumber === roomNumber);
@@ -183,14 +188,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     }
   };
 
-  // --- HÀM XỬ LÝ HỦY TRƯỞNG PHÒNG ---
   const handleRemoveLeader = (roomNumber: number) => {
     if (!canManage) return;
-    setLeaders((prev) => {
-      const updated = { ...prev };
-      delete updated[roomNumber];
-      return updated;
-    });
     setActiveDropdownRoom(null);
 
     const currentRoom = rooms.find((r) => r.roomNumber === roomNumber);
@@ -210,15 +209,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   return (
     <div className="room-container">
-      {/* HEADER BÁO CÁO */}
+      {/* PHẦN HEADER & THỐNG KÊ */}
       <div className="room-header">
         <div>
           <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             Sơ Đồ Phòng KTX QPAN ({filteredRooms.length}/{rooms.length} Phòng)
           </h2>
-          <p>
-            Mỗi phòng tối đa 12 SV • Sắp xếp tuần tự theo giới tính • Tự động mở rộng phòng khi vượt sĩ số
-          </p>
+          <p>Mỗi phòng tối đa 12 SV • Sắp xếp tuần tự theo giới tính • Tự động mở rộng phòng khi vượt sĩ số</p>
         </div>
 
         <div className="room-stats">
@@ -233,17 +230,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         </div>
       </div>
 
-      {/* THANH LỌC THEO THẦY CÔ PHỤ TRÁCH */}
+      {/* PHẦN BỘ LỌC GIÁO VIÊN */}
       <div style={{
-        background: '#f8fafc',
-        padding: '12px 18px',
-        borderRadius: '8px',
-        border: '1px solid #cbd5e1',
-        marginBottom: '20px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '12px',
-        flexWrap: 'wrap'
+        background: '#f8fafc', padding: '12px 18px', borderRadius: '8px',
+        border: '1px solid #cbd5e1', marginBottom: '20px', display: 'flex',
+        alignItems: 'center', gap: '12px', flexWrap: 'wrap'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#334155', fontWeight: 600, fontSize: '14px' }}>
           <Filter size={18} color="#2563eb" />
@@ -254,23 +245,14 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           value={selectedTeacherFilter}
           onChange={(e) => setSelectedTeacherFilter(e.target.value)}
           style={{
-            padding: '8px 12px',
-            borderRadius: '6px',
-            border: '1px solid #94a3b8',
-            outline: 'none',
-            fontSize: '14px',
-            background: '#ffffff',
-            minWidth: '240px',
-            cursor: 'pointer',
-            color: '#1e293b',
-            fontWeight: 500
+            padding: '8px 12px', borderRadius: '6px', border: '1px solid #94a3b8',
+            outline: 'none', fontSize: '14px', background: '#ffffff', minWidth: '240px',
+            cursor: 'pointer', color: '#1e293b', fontWeight: 500
           }}
         >
           <option value="">-- Tất cả Thầy/Cô (Hiện toàn bộ phòng) --</option>
           {teacherList.map((teacher) => (
-            <option key={teacher} value={teacher}>
-              {teacher}
-            </option>
+            <option key={teacher} value={teacher}>{teacher}</option>
           ))}
         </select>
 
@@ -279,14 +261,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             type="button"
             onClick={() => setSelectedTeacherFilter('')}
             style={{
-              padding: '8px 12px',
-              borderRadius: '6px',
-              border: '1px solid #ef4444',
-              background: '#fef2f2',
-              color: '#dc2626',
-              fontSize: '13px',
-              fontWeight: 600,
-              cursor: 'pointer'
+              padding: '8px 12px', borderRadius: '6px', border: '1px solid #ef4444',
+              background: '#fef2f2', color: '#dc2626', fontSize: '13px',
+              fontWeight: 600, cursor: 'pointer'
             }}
           >
             ✕ Bỏ lọc
@@ -294,7 +271,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         )}
       </div>
 
-      {/* GRID PHÒNG */}
+      {/* DANH SÁCH PHÒNG */}
       <div className="rooms-grid">
         {filteredRooms.length === 0 ? (
           <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px', color: '#64748b', background: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
@@ -306,7 +283,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             const isEmpty = room.students.length === 0;
             const currentLeaderKey = leaders[room.roomNumber];
             const isDropdownOpen = activeDropdownRoom === room.roomNumber;
-
             const currentLeaderStudent = room.students.find(
               (st) => String(st.studentId || st.id) === currentLeaderKey
             );
@@ -317,7 +293,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                 className={`room-card ${isEmpty ? 'empty' : ''} ${room.hasPenalized ? 'penalized-room' : ''}`}
                 style={{ position: 'relative' }}
               >
-                {/* Header card phòng */}
                 <div className="room-card-header">
                   <div className="room-title">
                     <Home size={18} />
@@ -334,21 +309,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                     {!isEmpty && canManage && (
                       <button
                         type="button"
-                        onClick={() =>
-                          setActiveDropdownRoom(isDropdownOpen ? null : room.roomNumber)
-                        }
+                        onClick={() => setActiveDropdownRoom(isDropdownOpen ? null : room.roomNumber)}
                         style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '4px',
-                          border: '1px solid #cbd5e1',
-                          background: currentLeaderKey ? '#fef9c3' : '#ffffff',
-                          color: currentLeaderKey ? '#854d0e' : '#475569',
-                          padding: '3px 8px',
-                          borderRadius: '6px',
-                          fontSize: '11px',
-                          fontWeight: 600,
-                          cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', gap: '4px',
+                          border: '1px solid #cbd5e1', background: currentLeaderKey ? '#fef9c3' : '#ffffff',
+                          color: currentLeaderKey ? '#854d0e' : '#475569', padding: '3px 8px',
+                          borderRadius: '6px', fontSize: '11px', fontWeight: 600, cursor: 'pointer',
                         }}
                       >
                         {currentLeaderKey ? (
@@ -369,32 +335,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
                 {/* DROPDOWN CHỌN TRƯỞNG PHÒNG */}
                 {isDropdownOpen && !isEmpty && canManage && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: '42px',
-                      right: '12px',
-                      zIndex: 20,
-                      background: '#ffffff',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '8px',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                      padding: '6px',
-                      minWidth: '200px',
-                      maxHeight: '220px',
-                      overflowY: 'auto',
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontWeight: 700,
-                        color: '#64748b',
-                        padding: '4px 8px',
-                        borderBottom: '1px solid #f1f5f9',
-                        marginBottom: '4px',
-                      }}
-                    >
+                  <div style={{
+                    position: 'absolute', top: '42px', right: '12px', zIndex: 20,
+                    background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)', padding: '6px', minWidth: '200px',
+                    maxHeight: '220px', overflowY: 'auto',
+                  }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', padding: '4px 8px', borderBottom: '1px solid #f1f5f9', marginBottom: '4px' }}>
                       CHỌN TRƯỞNG PHÒNG
                     </div>
 
@@ -403,17 +350,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                         type="button"
                         onClick={() => handleRemoveLeader(room.roomNumber)}
                         style={{
-                          width: '100%',
-                          textAlign: 'left',
-                          padding: '6px 8px',
-                          fontSize: '12px',
-                          color: '#dc2626',
-                          background: '#fef2f2',
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                          marginBottom: '4px',
-                          fontWeight: 600,
+                          width: '100%', textAlign: 'left', padding: '6px 8px', fontSize: '12px',
+                          color: '#dc2626', background: '#fef2f2', border: 'none', borderRadius: '4px',
+                          cursor: 'pointer', marginBottom: '4px', fontWeight: 600,
                         }}
                       >
                         ✕ Hủy vị trí Trưởng phòng
@@ -430,24 +369,15 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                           type="button"
                           onClick={() => handleSelectLeader(room.roomNumber, studentKey)}
                           style={{
-                            width: '100%',
-                            textAlign: 'left',
-                            padding: '6px 8px',
-                            fontSize: '12px',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
+                            width: '100%', textAlign: 'left', padding: '6px 8px', fontSize: '12px',
+                            border: 'none', borderRadius: '4px', cursor: 'pointer',
                             background: isSelected ? '#fefce8' : 'transparent',
                             color: isSelected ? '#854d0e' : '#334155',
                             fontWeight: isSelected ? 700 : 500,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                           }}
                         >
-                          <span>
-                            {idx + 1}. {st.name}
-                          </span>
+                          <span>{idx + 1}. {st.name}</span>
                           {isSelected && <Crown size={12} color="#eab308" />}
                         </button>
                       );
@@ -455,7 +385,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                   </div>
                 )}
 
-                {/* Sức chứa */}
                 <div className="room-capacity">
                   <span>Sức chứa: <strong>{room.students.length}/{MAX_PER_ROOM}</strong></span>
                   <span className={`status-pill ${isFull ? 'full' : isEmpty ? 'free' : 'available'}`}>
@@ -463,22 +392,17 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                   </span>
                 </div>
 
-                {/* Progress bar */}
                 <div className="progress-bar-bg">
                   <div
                     className="progress-bar-fill"
                     style={{
                       width: `${(room.students.length / MAX_PER_ROOM) * 100}%`,
-                      backgroundColor: room.hasPenalized
-                        ? '#ef4444'
-                        : room.genderType === 'Nữ'
-                        ? '#ec4899'
-                        : '#3b82f6',
+                      backgroundColor: room.hasPenalized ? '#ef4444' : room.genderType === 'Nữ' ? '#ec4899' : '#3b82f6',
                     }}
                   />
                 </div>
 
-                {/* Danh sách sinh viên */}
+                {/* DANH SÁCH SINH VIÊN TRONG PHÒNG */}
                 <div className="room-student-list">
                   {isEmpty ? (
                     <div className="empty-text">Phòng trống</div>
@@ -494,12 +418,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                           key={studentKey + '-' + idx}
                           className={`student-item ${isPenalized ? 'bad-student' : ''}`}
                           style={{
-                            backgroundColor: isLeader 
-                              ? '#fefce8' 
-                              : (selectedTeacherFilter && isTeacherMatch ? '#eff6ff' : undefined),
-                            borderColor: isLeader 
-                              ? '#fde047' 
-                              : (selectedTeacherFilter && isTeacherMatch ? '#bfdbfe' : undefined),
+                            backgroundColor: isLeader ? '#fefce8' : (selectedTeacherFilter && isTeacherMatch ? '#eff6ff' : undefined),
+                            borderColor: isLeader ? '#fde047' : (selectedTeacherFilter && isTeacherMatch ? '#bfdbfe' : undefined),
                             opacity: selectedTeacherFilter && !isTeacherMatch ? 0.4 : 1,
                           }}
                         >
@@ -511,11 +431,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                             }}
                           >
                             {isLeader && (
-                              <Crown
-                                size={14}
-                                color="#eab308"
-                                style={{ marginRight: 4, verticalAlign: 'middle' }}
-                              />
+                              <Crown size={14} color="#eab308" style={{ marginRight: 4, verticalAlign: 'middle' }} />
                             )}
                             {idx + 1}. {st.name} ({st.studentId || st.id})
                             {st.thayCo && <span style={{ fontSize: '10px', display: 'block', color: '#64748b' }}>GV: {st.thayCo}</span>}
