@@ -52,21 +52,21 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
   const [newLabel, setNewLabel] = useState<string>('');
   const [newPenalty, setNewPenalty] = useState<number>(1);
 
-  // --- STATE DÀNH CHO RENDER TỪNG LÔ 10 PHẦN TỬ (CHỐNG LAG) ---
-  const [visibleCount, setVisibleCount] = useState<number>(10);
+  // --- PHÂN TRANG HIỂN THỊ ĐỂ CHỐNG LAG DOM ---
+  const [page, setPage] = useState<number>(1);
+  const ITEMS_PER_PAGE = 30;
 
   const canManage = currentUser?.role === 'admin' || currentUser?.can_manage === true;
 
-  // --- LẤY TRỰC TIẾP TỪ CỘT 'Phong' VÀ 'ThayCo' CỦA BẢNG DanhSachSinhVien ---
+  // --- LẤY DỮ LIỆU TỪ CỘT 'Phong' VÀ 'ThayCo' (Đã fix quét đa dạng tên thuộc tính) ---
   const processedStudents = useMemo<ScoringStudent[]>(() => {
     if (!students || students.length === 0) return [];
-
     const activeStudents = (students as ScoringStudent[]).filter((s) => !s.isAbsent);
 
-    return activeStudents.map((st) => ({
+    return activeStudents.map((st: any) => ({
       ...st,
-      room: (st.Phong ?? st.roomName ?? st.room ?? 'Chưa phân phòng').toString().trim(),
-      thayCo: (st.ThayCo ?? st.thayCo ?? st.teacher ?? 'Chưa phân công').toString().trim(),
+      room: (st.Phong ?? st.phong ?? st.roomName ?? st.room ?? st['Phòng'] ?? 'Chưa phân phòng').toString().trim(),
+      thayCo: (st.ThayCo ?? st.thayco ?? st.thayCo ?? st.teacher ?? st['Giảng viên'] ?? 'Chưa phân công').toString().trim(),
     }));
   }, [students]);
 
@@ -137,7 +137,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     fetchData();
   }, []);
 
-  // --- LỌC SINH VIÊN THEO CẢ PHÒNG, THẦY CƠ VÀ TỪ KHÓA ---
+  // --- TỐI ƯU HÓA LỌC BẰNG USEMEMO ---
   const filteredStudents = useMemo(() => {
     return processedStudents.filter((s) => {
       const roomMatch = selectedRoom === 'Tất cả' || s.room === selectedRoom;
@@ -151,26 +151,15 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     });
   }, [processedStudents, selectedRoom, selectedTeacher, searchTerm]);
 
-  // --- RESET LẠI SỐ LƯỢNG RENDER KHI THAY ĐỔI BỘ LỌC HOẶC TỪ KHÓA ---
+  // Reset trang về 1 mỗi khi đổi bộ lọc
   useEffect(() => {
-    setVisibleCount(10);
+    setPage(1);
   }, [selectedRoom, selectedTeacher, searchTerm]);
 
-  // --- CƠ CHẾ TĂNG DẦN SỐ LƯỢNG HIỂN THỊ (MỖI 10S THÊM 10 HOẶC TIẾP TỤC RENDER LÔ KẾ TIẾP MƯỢT MÀ) ---
+  // Danh sách hiển thị theo trang để chống lag
   const displayedStudents = useMemo(() => {
-    return filteredStudents.slice(0, visibleCount);
-  }, [filteredStudents, visibleCount]);
-
-  useEffect(() => {
-    if (visibleCount >= filteredStudents.length) return;
-
-    // Tự động nhồi thêm mỗi 50-100ms hoặc chỉnh tuỳ ý để load mượt dần toàn bộ danh sách
-    const timer = setTimeout(() => {
-      setVisibleCount((prev) => Math.min(prev + 10, filteredStudents.length));
-    }, 80);
-
-    return () => clearTimeout(timer);
-  }, [visibleCount, filteredStudents.length]);
+    return filteredStudents.slice(0, page * ITEMS_PER_PAGE);
+  }, [filteredStudents, page]);
 
   const calculateFinalScore = (studentKey: string) => {
     const studentData = scores[studentKey];
@@ -333,7 +322,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     }
   };
 
-  // --- DANH SÁCH PHÒNG ĐỂ LỌC ---
   const roomList = useMemo(() => {
     const rooms = new Set<string>();
     processedStudents.forEach((s) => {
@@ -342,7 +330,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     return ['Tất cả', ...Array.from(rooms).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))];
   }, [processedStudents]);
 
-  // --- DANH SÁCH THẦY CÔ ĐỂ LỌC ---
   const teacherList = useMemo(() => {
     const teachers = new Set<string>();
     processedStudents.forEach((s) => {
@@ -605,9 +592,25 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
               </tbody>
             </table>
           </div>
+
+          {/* THANH PHÂN TRANG / XEM THÊM */}
           {displayedStudents.length < filteredStudents.length && (
-            <div style={{ textAlign: 'center', padding: '10px', fontSize: '13px', color: '#64748b', fontStyle: 'italic' }}>
-              Đang tải thêm danh sách... ({displayedStudents.length}/{filteredStudents.length})
+            <div style={{ textAlign: 'center', padding: '16px' }}>
+              <button
+                onClick={() => setPage(p => p + 1)}
+                style={{
+                  backgroundColor: '#2563eb',
+                  color: '#fff',
+                  border: 'none',
+                  padding: '8px 20px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  fontSize: '13px'
+                }}
+              >
+                Xem thêm sinh viên ({displayedStudents.length}/{filteredStudents.length})
+              </button>
             </div>
           )}
         </div>
@@ -711,7 +714,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
                       <td style={{ padding: '8px', textAlign: 'center' }}>
                         {!DEFAULT_VIOLATIONS.some(def => def.code === v.code) && (
                           <button onClick={() => handleDeleteRule(v.code)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444' }} title="Xóa lỗi">
-                            <Trash2 size={16} />
+                            <Trash2 size= {16} />
                           </button>
                         )}
                       </td>
