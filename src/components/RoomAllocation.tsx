@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Home, Users, AlertTriangle, Crown, UserCheck, Filter, Lock, Unlock, UserX, AlertCircle } from 'lucide-react';
+import { Home, Users, AlertTriangle, Crown, UserCheck, Filter, Lock, Unlock, UserX, AlertCircle, User, UserPlus } from 'lucide-react';
 import type { Student } from '../types/student';
-import type { User } from '../types/auth';
+import type { User as AuthUser } from '../types/auth';
 import { supabase } from '../supabaseClient';
 import './RoomAllocation.css';
 
@@ -19,7 +19,7 @@ interface RoomAllocationProps {
   setStudents?: React.Dispatch<React.SetStateAction<Student[]>>;
   onSetRoomLeader?: (leaderStudentId: string | null, roomStudentKeys: string[]) => void;
   onUpdateRoomData?: (roomAssignments: { studentKey: string; roomNumber: number }[]) => void;
-  currentUser?: (User & { can_manage?: boolean }) | null;
+  currentUser?: (AuthUser & { can_manage?: boolean }) | null;
 }
 
 export const RoomAllocation: React.FC<RoomAllocationProps> = ({
@@ -38,7 +38,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [teacherList, setTeacherList] = useState<string[]>([]);
   const [selectedTeacherFilter, setSelectedTeacherFilter] = useState<string>('');
 
-  // State quản lý Modal xác nhận xóa sinh viên đẹp hơn
   const [studentToDelete, setStudentToDelete] = useState<Student | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
 
@@ -102,7 +101,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const calculateRoomAllocation = useCallback((): Room[] => {
     const allValidStudents = students.filter((s: any) => {
-      if (s.isAbsent) return false;
+      if (s.isAbsent || s.Vang === 'x') return false;
       return true; 
     });
 
@@ -245,8 +244,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     };
   }, [students.length, calculateRoomAllocation]);
 
-  // Hàm thực hiện xóa sinh viên sau khi bấm nút Đồng ý trên Modal
-  const confirmDeleteStudent = async () => {
+  const confirmMarkAbsent = async () => {
     if (!studentToDelete || !canManage) return;
 
     setIsDeleting(true);
@@ -255,14 +253,15 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     try {
       const mssvValue = studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id;
 
+      // Cập nhật cột Vang thành 'x' trong bảng DanhSachSinhVien thay vì xóa
       const { error } = await supabase
         .from('DanhSachSinhVien')
-        .delete()
+        .update({ Vang: 'x' })
         .eq('MSSV', mssvValue);
 
       if (error) {
-        console.error('Lỗi xóa sinh viên từ Supabase:', error.message);
-        alert('Lỗi khi xóa khỏi CSDL: ' + error.message);
+        console.error('Lỗi cập nhật vắng trong Supabase:', error.message);
+        alert('Lỗi khi cập nhật CSDL: ' + error.message);
         setIsDeleting(false);
         return;
       }
@@ -272,11 +271,15 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       return;
     }
 
+    // Cập nhật state local đánh dấu vắng để sinh viên biến mất khỏi sơ đồ phòng
     if (setStudents) {
       setStudents((prevStudents) =>
-        prevStudents.filter((s) => {
+        prevStudents.map((s) => {
           const sKey = String(s.MSSV || (s as any).studentId || s.id);
-          return sKey !== studentKey;
+          if (sKey === studentKey) {
+            return { ...s, isAbsent: true, Vang: 'x' };
+          }
+          return s;
         })
       );
     }
@@ -340,7 +343,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           const freshStudent = students.find(s => 
             String(s.MSSV || (s as any).studentId || (s as any).id) === String(lockedStudent.MSSV || (lockedStudent as any).studentId || (lockedStudent as any).id)
           );
-          return freshStudent || null;
+          if (!freshStudent || freshStudent.isAbsent || freshStudent.Vang === 'x') {
+            return null;
+          }
+          return freshStudent;
         })
         .filter(Boolean) as Student[]
     }));
@@ -428,7 +434,14 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   }, [rooms]);
 
   const totalPenalized = useMemo(() => {
-    return students.filter((s: any) => s.isAbsent || s.isLate).length;
+    return students.filter((s: any) => (s.isAbsent || s.Vang === 'x') || s.isLate).length;
+  }, [students]);
+
+  const { totalFemale, totalMale } = useMemo(() => {
+    const validStudents = students.filter((s: any) => !s.isAbsent && s.Vang !== 'x');
+    const femaleCount = validStudents.filter((s: any) => s.gender === 'Nữ').length;
+    const maleCount = validStudents.filter((s: any) => s.gender !== 'Nữ').length;
+    return { totalFemale: femaleCount, totalMale: maleCount };
   }, [students]);
 
   return (
@@ -445,8 +458,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           </h2>
           <p>
             {isRoomLocked 
-              ? 'Phòng đã được khóa cố định. Nút "Nghỉ" đang hiển thị để xóa vĩnh viễn sinh viên khỏi CSDL.' 
-              : 'Đang ở chế độ tự động phân phòng. Hãy bấm "Khóa Cố Định Phòng" để hiển thị nút xóa nghỉ.'}
+              ? 'Phòng đã được khóa cố định. Bấm "Nghỉ" để đánh dấu vắng và ẩn sinh viên khỏi sơ đồ.' 
+              : 'Đang ở chế độ tự động phân phòng. Hãy bấm "Khóa Cố Định Phòng" để hiển thị nút nghỉ.'}
           </p>
         </div>
 
@@ -478,6 +491,14 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             <div className="stat-card">
               <Users size={18} color="#2563eb" />
               <span>Đang ở: <strong>{totalActiveAllocated}</strong> SV</span>
+            </div>
+            <div className="stat-card" style={{ background: '#fdf2f8', borderColor: '#fbcfe8', color: '#db2777' }}>
+              <User size={18} color="#db2777" />
+              <span>Tổng Nữ: <strong>{totalFemale}</strong></span>
+            </div>
+            <div className="stat-card" style={{ background: '#eff6ff', borderColor: '#bfdbfe', color: '#2563eb' }}>
+              <UserPlus size={18} color="#2563eb" />
+              <span>Tổng Nam: <strong>{totalMale}</strong></span>
             </div>
             <div className="stat-card warning">
               <AlertTriangle size={18} color="#dc2626" />
@@ -781,12 +802,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                             {st.isLate && <span className="tag-bad late" style={{ fontSize: '10px', padding: '1px 4px' }}>Trễ</span>}
                             
-                            {/* Nút Nghỉ chỉ hiện khi phòng đã được KHÓA CỐ ĐỊNH */}
                             {canManage && isRoomLocked && (
                               <button
                                 type="button"
                                 onClick={() => setStudentToDelete(st)}
-                                title="Xóa vĩnh viễn sinh viên này ra khỏi database"
+                                title="Đánh dấu vắng và ẩn khỏi sơ đồ phòng"
                                 style={{
                                   display: 'flex',
                                   alignItems: 'center',
@@ -817,7 +837,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         )}
       </div>
 
-      {/* --- CUSTOM MODAL THÔNG BÁO XÁC NHẬN XÓA ĐẸP MẮT --- */}
       {studentToDelete && (
         <div style={{
           position: 'fixed',
@@ -841,9 +860,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
             overflow: 'hidden',
             border: '1px solid #e2e8f0',
-            animation: 'modalScaleIn 0.2s ease-out'
           }}>
-            {/* Header Modal */}
             <div style={{
               padding: '24px 24px 16px 24px',
               display: 'flex',
@@ -863,60 +880,46 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                 <AlertCircle size={24} />
               </div>
               <div>
-                <h3 style={{
-                  margin: '0 0 6px 0',
-                  fontSize: '18px',
-                  fontWeight: 700,
-                  color: '#0f172a'
-                }}>
-                  Xác nhận xóa sinh viên
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', color: '#0f172a', fontWeight: 600 }}>
+                  Xác nhận sinh viên nghỉ học
                 </h3>
-                <p style={{
-                  margin: 0,
-                  fontSize: '14px',
-                  color: '#64748b',
-                  lineHeight: '1.5'
-                }}>
-                  Bạn có chắc chắn muốn xóa vĩnh viễn sinh viên <strong style={{ color: '#0f172a' }}>{studentToDelete.name}</strong> (<span style={{ color: '#2563eb' }}>{studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id}</span>) ra khỏi cơ sở dữ liệu không?
+                <p style={{ margin: 0, fontSize: '14px', color: '#64748b', lineHeight: '1.5' }}>
+                  Bạn có chắc chắn muốn đánh dấu sinh viên <strong style={{ color: '#0f172a' }}>{studentToDelete.name}</strong> ({studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id}) nghỉ học không? Hệ thống sẽ cập nhật tích vắng (`Vang = 'x'`) và ẩn sinh viên này khỏi sơ đồ phòng.
                 </p>
               </div>
             </div>
 
-            {/* Footer Buttons */}
             <div style={{
               padding: '16px 24px',
               backgroundColor: '#f8fafc',
-              borderTop: '1px solid #f1f5f9',
+              borderTop: '1px solid #e2e8f0',
               display: 'flex',
-              alignItems: 'center',
               justifyContent: 'flex-end',
-              gap: '10px'
+              gap: '12px'
             }}>
               <button
                 type="button"
-                disabled={isDeleting}
                 onClick={() => setStudentToDelete(null)}
+                disabled={isDeleting}
                 style={{
-                  padding: '10px 16px',
+                  padding: '8px 16px',
                   borderRadius: '8px',
                   border: '1px solid #cbd5e1',
                   backgroundColor: '#ffffff',
                   color: '#334155',
                   fontSize: '14px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  transition: 'background 0.2s'
+                  fontWeight: 500,
+                  cursor: 'pointer'
                 }}
               >
-                Hủy bỏ
+                Hủy
               </button>
-              
               <button
                 type="button"
+                onClick={confirmMarkAbsent}
                 disabled={isDeleting}
-                onClick={confirmDeleteStudent}
                 style={{
-                  padding: '10px 20px',
+                  padding: '8px 16px',
                   borderRadius: '8px',
                   border: 'none',
                   backgroundColor: '#dc2626',
@@ -926,11 +929,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '6px',
-                  transition: 'background 0.2s'
+                  gap: '6px'
                 }}
               >
-                {isDeleting ? 'Đang xóa...' : 'Xóa vĩnh viễn'}
+                {isDeleting ? 'Đang xử lý...' : 'Đồng ý nghỉ'}
               </button>
             </div>
           </div>

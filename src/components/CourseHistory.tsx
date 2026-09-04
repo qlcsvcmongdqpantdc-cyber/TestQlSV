@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
+import * as XLSX from 'xlsx';
 import './CourseHistory.css';
 
 interface HistoryRecord {
   id: number;
-  MaKhoaHoc: string;
+  MaKhóaHoc?: string;
+  MaKhoaHoc?: string;
   Dot: string;
   HocKy: string;
   NamHoc: string;
@@ -15,12 +17,8 @@ interface HistoryRecord {
   Phong: string;
   Vang: string;
   DiTre: string;
+  MuonDo?: string;
   GhiChu: string;
-}
-
-interface CourseOption {
-  key: string;
-  label: string;
 }
 
 interface CourseHistoryProps {
@@ -29,93 +27,81 @@ interface CourseHistoryProps {
 
 export function CourseHistory({ selectedCourseKey: propCourseKey }: CourseHistoryProps) {
   const [data, setData] = useState<HistoryRecord[]>([]);
-  const [courses, setCourses] = useState<CourseOption[]>([]);
-  const [selectedCourseKey, setSelectedCourseKey] = useState<string>(''); 
   const [loading, setLoading] = useState(false);
-  const [loadingCourses, setLoadingCourses] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // 1. Tải danh sách các khóa học để hiển thị trên Dropdown
+  // 3 ô input để người dùng tự gõ
+  const [inputDot, setInputDot] = useState('');
+  const [inputHocKy, setInputHocKy] = useState('');
+  const [inputNamHoc, setInputNamHoc] = useState('');
+
+  // Trạng thái lưu thông tin đã submit để hiển thị tiêu đề
+  const [searchedInfo, setSearchedInfo] = useState<{ dot: string; hocKy: string; namHoc: string } | null>(null);
+
   useEffect(() => {
-    const fetchCoursesList = async () => {
-      setLoadingCourses(true);
-      const { data: result, error } = await supabase
-        .from('KhoaHocDaKetThuc')
-        .select('*');
-
-      if (error) {
-        console.error('Lỗi tải danh sách khóa học:', error.message);
-      } else if (result && result.length > 0) {
-        const uniqueMap = new Map<string, CourseOption>();
-        result.forEach((item: any) => {
-          const courseKey = item.MaKhoaHoc || item.MaKhóaHoc;
-          if (courseKey && !uniqueMap.has(courseKey)) {
-            const dot = item.Dot || '';
-            const hocKy = item.HocKy || '';
-            const namHoc = item.NamHoc || '';
-            const labelParts = [dot, hocKy, namHoc].filter(Boolean);
-            uniqueMap.set(courseKey, {
-              key: courseKey,
-              label: labelParts.length > 0 ? labelParts.join(' - ') : courseKey,
-            });
-          }
-        });
-
-        const courseOptions = Array.from(uniqueMap.values());
-        setCourses(courseOptions);
-
-        if (propCourseKey) {
-          setSelectedCourseKey(propCourseKey);
-        }
-      }
-      setLoadingCourses(false);
-    };
-
-    fetchCoursesList();
+    if (propCourseKey) {
+      // Xử lý nếu có prop truyền vào từ bên ngoài
+    }
   }, [propCourseKey]);
 
-  // 2. Tải dữ liệu chi tiết khi chọn khóa học
-  useEffect(() => {
-    if (selectedCourseKey) {
-      fetchHistoryData(selectedCourseKey);
-    } else {
-      setData([]);
+  // Hàm tìm kiếm trực tiếp trên Supabase theo điều kiện người dùng nhập
+  const handleSearch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+
+    if (!inputDot.trim() && !inputHocKy.trim() && !inputNamHoc.trim()) {
+      alert('Vui lòng nhập ít nhất một thông tin (Đợt, Học kỳ hoặc Năm học)!');
+      return;
     }
-  }, [selectedCourseKey]);
 
-  const fetchHistoryData = async (courseKey: string) => {
     setLoading(true);
-    
-    // Lấy đồng thời lịch sử khóa học và bảng ChamDiem để đồng bộ GhiChu mới nhất
-    const [historyRes, chamDiemRes] = await Promise.all([
-      supabase.from('KhoaHocDaKetThuc').select('*'),
-      supabase.from('ChamDiem').select('*')
-    ]);
 
-    if (historyRes.error) {
-      console.error('Lỗi tải lịch sử khóa học:', historyRes.error.message);
-    } else if (historyRes.data) {
-      const filteredData = historyRes.data.filter(
-        (item: any) => (item.MaKhoaHoc || item.MaKhóaHoc) === courseKey
-      );
+    try {
+      let query = supabase.from('KhoaHocDaKetThuc').select('*');
 
-      // Tạo bản đồ tra cứu GhiChu từ bảng ChamDiem theo MSSV
-      const ghiChuMap = new Map<string, string>();
-      if (chamDiemRes.data) {
-        chamDiemRes.data.forEach((cd: any) => {
-          const mssv = (cd.MSSV || cd.MSV || cd.studentId || cd.MaSV || '').trim();
-          if (mssv && cd.GhiChu) {
-            ghiChuMap.set(mssv, cd.GhiChu);
-          }
-        });
+      if (inputDot.trim()) {
+        query = query.ilike('Dot', `%${inputDot.trim()}%`);
       }
+      if (inputHocKy.trim()) {
+        query = query.ilike('HocKy', `%${inputHocKy.trim()}%`);
+      }
+      if (inputNamHoc.trim()) {
+        query = query.ilike('NamHoc', `%${inputNamHoc.trim()}%`);
+      }
+
+      const { data: historyData, error: historyError } = await query;
+
+      if (historyError) {
+        console.error('Lỗi tải dữ liệu:', historyError.message);
+        setLoading(false);
+        return;
+      }
+
+      const rows = historyData || [];
+
+      // Lấy danh sách MSSV để query bảng ChamDiem tương ứng
+      const mssvList = rows.map((item: any) => item.MSSV).filter(Boolean);
+
+      let chamDiemData: any[] = [];
+      if (mssvList.length > 0) {
+        const { data: cdData } = await supabase
+          .from('ChamDiem')
+          .select('*')
+          .in('MSSV', mssvList);
+        if (cdData) chamDiemData = cdData;
+      }
+
+      const ghiChuMap = new Map<string, string>();
+      chamDiemData.forEach((cd: any) => {
+        const mssv = (cd.MSSV || cd.MSV || cd.studentId || cd.MaSV || '').trim();
+        if (mssv && cd.GhiChu) {
+          ghiChuMap.set(mssv, cd.GhiChu);
+        }
+      });
       
-      // Map dữ liệu, ưu tiên lấy GhiChu từ bảng ChamDiem và lọc bỏ ký tự 'x' cũ
-      const mappedData: HistoryRecord[] = filteredData.map((item: any) => {
+      const mappedData: HistoryRecord[] = rows.map((item: any) => {
         const mssv = (item.MSSV || '').trim();
         let note = ghiChuMap.get(mssv) || item.GhiChu || item.TruongPhong || '';
         
-        // Loại bỏ ký tự 'x' hoặc 'X' do logic trưởng phòng cũ để lại
         if (note === 'x' || note === 'X') {
           note = '';
         }
@@ -127,78 +113,177 @@ export function CourseHistory({ selectedCourseKey: propCourseKey }: CourseHistor
       });
 
       setData(mappedData);
+      setSearchedInfo({ dot: inputDot, hocKy: inputHocKy, namHoc: inputNamHoc });
+    } catch (err) {
+      console.error('Lỗi hệ thống:', err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
-  const filtered = data.filter(
+  // Hàm xuất file Excel chuẩn .xlsx đẹp mắt
+  const handleExportExcel = () => {
+    if (filteredTableData.length === 0) {
+      alert('Không có dữ liệu để xuất file!');
+      return;
+    }
+
+    const excelData = filteredTableData.map((item, index) => ({
+      'STT': index + 1,
+      'MSSV': item.MSSV || '',
+      'Họ và Tên': item.HoVaTen || '',
+      'Giới Tính': item.GioiTinh || '',
+      'Lớp': item.Lop || '',
+      'Phòng': item.Phong || '',
+      'Vắng': item.Vang ? 'Vắng' : '',
+      'Đi Trễ': item.DiTre ? 'Trễ' : '',
+      'Mượn Đồ': item.MuonDo || '',
+      'Ghi Chú': item.GhiChu || ''
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+
+    const colWidths = [
+      { wch: 6 },  // STT
+      { wch: 15 }, // MSSV
+      { wch: 25 }, // Họ và Tên
+      { wch: 10 }, // Giới Tính
+      { wch: 15 }, // Lớp
+      { wch: 12 }, // Phòng
+      { wch: 10 }, // Vắng
+      { wch: 10 }, // Đi Trễ
+      { wch: 15 }, // Mượn Đồ
+      { wch: 25 }  // Ghi Chú
+    ];
+    worksheet['!cols'] = colWidths;
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'LichSuKhoaHoc');
+
+    const fileName = `LichSuKhoaHoc_${searchedInfo?.dot || 'Dot'}_${searchedInfo?.hocKy || 'HK'}.xlsx`;
+    XLSX.writeFile(workbook, fileName);
+  };
+
+  // Lọc tìm kiếm nhanh trên bảng kết quả hiện tại
+  const filteredTableData = data.filter(
     (item) =>
       item.HoVaTen?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.MSSV?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.Lop?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      item.MuonDo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.GhiChu?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
     <div className="history-container">
-      {/* Thanh lựa chọn Khóa Học & Tìm kiếm */}
-      <div className="history-controls">
-        <div className="history-dropdown-wrapper">
-          <label className="history-label">
-            📚 Chọn khóa học:
-          </label>
-          <select
-            value={selectedCourseKey}
-            onChange={(e) => setSelectedCourseKey(e.target.value)}
-            disabled={loadingCourses || courses.length === 0}
-            className="history-select"
-          >
-            <option value="">-- Vui lòng chọn đợt/học kỳ --</option>
-            {loadingCourses ? (
-              <option value="" disabled>Đang tải danh sách...</option>
-            ) : (
-              courses.map((course) => (
-                <option key={course.key} value={course.key}>
-                  {course.label}
-                </option>
-              ))
-            )}
-          </select>
-        </div>
-
-        {selectedCourseKey && (
+      {/* Form nhập 3 trường Dot, HocKy, NamHoc */}
+      <form onSubmit={handleSearch} className="history-controls" style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <label className="history-label">Đợt:</label>
           <input
             type="text"
-            placeholder="🔍 Tìm theo Họ tên, MSSV, Lớp, Ghi chú..."
+            placeholder="VD: Đợt 5, 5..."
+            value={inputDot}
+            onChange={(e) => setInputDot(e.target.value)}
+            className="history-search-input"
+            style={{ width: '160px' }}
+          />
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <label className="history-label">Học Kỳ:</label>
+          <input
+            type="text"
+            placeholder="VD: HK3, 3..."
+            value={inputHocKy}
+            onChange={(e) => setInputHocKy(e.target.value)}
+            className="history-search-input"
+            style={{ width: '160px' }}
+          />
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <label className="history-label">Năm Học:</label>
+          <input
+            type="text"
+            placeholder="VD: 2025-2026..."
+            value={inputNamHoc}
+            onChange={(e) => setInputNamHoc(e.target.value)}
+            className="history-search-input"
+            style={{ width: '180px' }}
+          />
+        </div>
+
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', height: '100%', paddingTop: '22px' }}>
+          <button
+            type="submit"
+            style={{
+              padding: '10px 20px',
+              backgroundColor: '#2563eb',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 500,
+            }}
+          >
+            🔍 Xem dữ liệu
+          </button>
+
+          {searchedInfo && (
+            <button
+              type="button"
+              onClick={handleExportExcel}
+              style={{
+                padding: '10px 16px',
+                backgroundColor: '#16a34a',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontWeight: 500,
+              }}
+            >
+              📥 Xuất Excel
+            </button>
+          )}
+        </div>
+      </form>
+
+      {searchedInfo && (
+        <div style={{ marginTop: '16px' }}>
+          <input
+            type="text"
+            placeholder="🔍 Tìm nhanh trong bảng (Họ tên, MSSV, Lớp...)"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="history-search-input"
+            style={{ width: '100%', marginBottom: '16px' }}
           />
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* Giao diện khi chưa chọn khóa học */}
-      {!selectedCourseKey ? (
+      {!searchedInfo ? (
         <div className="history-empty-state">
           <p className="history-empty-text">
-            Vui lòng chọn một đợt học / học kỳ từ danh sách phía trên để hiển thị thông tin chi tiết.
+            Vui lòng nhập thông tin Đợt, Học kỳ hoặc Năm học ở phía trên và bấm <strong>"Xem dữ liệu"</strong>.
           </p>
         </div>
       ) : (
         <>
-          {/* Thông tin tiêu đề khóa học */}
           <div className="history-course-header">
             <h2 className="history-course-title">
-              {data[0] ? `${data[0].Dot} - ${data[0].HocKy} - ${data[0].NamHoc}` : selectedCourseKey}
+              Kết quả tìm kiếm: {searchedInfo.dot ? `Đợt ${searchedInfo.dot} ` : ''} 
+              {searchedInfo.hocKy ? `- HK${searchedInfo.hocKy} ` : ''} 
+              {searchedInfo.namHoc ? `- Năm ${searchedInfo.namHoc}` : ''}
             </h2>
             <p className="history-course-subtitle">
-              Tổng số sinh viên ghi nhận: <strong>{data.length}</strong>
+              Tổng số sinh viên tìm thấy: <strong>{data.length}</strong>
             </p>
           </div>
 
-          {/* Bảng Dữ Liệu */}
           {loading ? (
-            <p style={{ padding: '20px 0', color: '#64748b', textAlign: 'center' }}>Đang tải dữ liệu khóa học...</p>
+            <p style={{ padding: '20px 0', color: '#64748b', textAlign: 'center' }}>Đang tải dữ liệu...</p>
           ) : (
             <div className="history-table-wrapper">
               <table className="history-table">
@@ -212,18 +297,19 @@ export function CourseHistory({ selectedCourseKey: propCourseKey }: CourseHistor
                     <th>PHÒNG</th>
                     <th className="text-center">VẮNG</th>
                     <th className="text-center">ĐI TRỄ</th>
+                    <th>MƯỢN ĐỒ</th>
                     <th>GHI CHÚ</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.length === 0 ? (
+                  {filteredTableData.length === 0 ? (
                     <tr>
-                      <td colSpan={9} style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>
-                        Không tìm thấy dữ liệu sinh viên phù hợp.
+                      <td colSpan={10} style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>
+                        Không tìm thấy dữ liệu sinh viên phù hợp với thông tin đã nhập.
                       </td>
                     </tr>
                   ) : (
-                    filtered.map((item, index) => (
+                    filteredTableData.map((item, index) => (
                       <tr key={item.id || index}>
                         <td>{index + 1}</td>
                         <td className="col-mssv">{item.MSSV}</td>
@@ -237,6 +323,7 @@ export function CourseHistory({ selectedCourseKey: propCourseKey }: CourseHistor
                         <td className={`text-center ${item.DiTre ? 'icon-check-late' : 'icon-dash'}`}>
                           {item.DiTre ? '✔' : '-'}
                         </td>
+                        <td>{item.MuonDo || '-'}</td>
                         <td>{item.GhiChu || '-'}</td>
                       </tr>
                     ))
