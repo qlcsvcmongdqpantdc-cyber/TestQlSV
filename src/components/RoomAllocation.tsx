@@ -104,24 +104,29 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       if (s.isAbsent || s.Vang === 'x') return false;
       return true; 
     });
-
+    // Cập nhật lại database sinh viên đi trể (ai có thời gian nhỏ hơn thì được ưu tiên đến trước)
     const sortWithinGender = (group: Student[]) => {
-      const regular = group.filter((s) => !s.isLate);
-      const late = group
-        .filter((s) => s.isLate)
-        .sort((a, b) => {
-          const timeA = a.late_at ? new Date(a.late_at).getTime() : 0;
-          const timeB = b.late_at ? new Date(b.late_at).getTime() : 0;
-
-          if (timeA !== timeB) return timeA - timeB;
-
-          const idA = String(a.MSSV || a.id || '');
-          const idB = String(b.MSSV || b.id || '');
-          return idA.localeCompare(idB);
-        });
-
-      return [...regular, ...late];
-    };
+  const regular = group.filter((s) => !s.isLate);
+  const late = group
+    .filter((s) => s.isLate)
+    .sort((a, b) => {
+      const rawA = a.late_at || (a as any).late_at;
+      const rawB = b.late_at || (b as any).late_at;
+      
+      const timeA = rawA ? new Date(String(rawA).replace(' ', 'T')).getTime() : 0;
+      const timeB = rawB ? new Date(String(rawB).replace(' ', 'T')).getTime() : 0;
+      
+      // 1. So sánh thời gian (Đảo ngược: ai đến muộn hơn đứng trước)
+      if (timeA !== timeB) return timeB - timeA;
+      
+      // 2. Nếu trùng thời gian, sắp xếp theo tên ngược lại (Z -> A)
+      const nameA = String(a.name || '');
+      const nameB = String(b.name || '');
+      return nameB.localeCompare(nameA, 'vi', { sensitivity: 'accent' });
+    });
+    
+  return [...regular, ...late];
+};
 
     const sortedFemales = sortWithinGender(allValidStudents.filter((s) => s.gender === 'Nữ'));
     const sortedMales = sortWithinGender(allValidStudents.filter((s) => s.gender !== 'Nữ'));
