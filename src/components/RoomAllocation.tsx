@@ -34,7 +34,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const [leaders, setLeaders] = useState<Record<number, string>>({});
   const [activeDropdownRoom, setActiveDropdownRoom] = useState<number | null>(null);
-  
+
   const [teacherList, setTeacherList] = useState<string[]>([]);
   const [selectedTeacherFilter, setSelectedTeacherFilter] = useState<string>('');
 
@@ -94,19 +94,21 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   }, []);
 
   const canManage = useMemo(() => {
-    return currentUser 
-      ? (currentUser.role === 'admin' || currentUser.can_manage === true) 
+    return currentUser
+      ? (currentUser.role === 'admin' || currentUser.can_manage === true)
       : true;
   }, [currentUser]);
 
   const calculateRoomAllocation = useCallback((): Room[] => {
     const allValidStudents = students.filter((s: any) => {
       if (s.isAbsent || s.Vang === 'x') return false;
-      return true; 
+      return true;
     });
     // Cập nhật lại database sinh viên đi trể (ai có thời gian nhỏ hơn thì được ưu tiên đến trước)
     const sortWithinGender = (group: Student[]) => {
   const regular = group.filter((s) => !s.isLate);
+  
+  // Lọc lấy danh sách trễ và sắp xếp chuẩn theo thời gian tăng dần (ai trước lên trước)
   const late = group
     .filter((s) => s.isLate)
     .sort((a, b) => {
@@ -116,13 +118,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       const timeA = rawA ? new Date(String(rawA).replace(' ', 'T')).getTime() : 0;
       const timeB = rawB ? new Date(String(rawB).replace(' ', 'T')).getTime() : 0;
       
-      // 1. So sánh thời gian (Đảo ngược: ai đến muộn hơn đứng trước)
-      if (timeA !== timeB) return timeB - timeA;
+      // Sắp xếp thời gian từ nhỏ đến lớn (ai bấm trước / thời gian sớm hơn đứng trên)
+      if (timeA !== timeB) {
+        return timeA - timeB;
+      }
       
-      // 2. Nếu trùng thời gian, sắp xếp theo tên ngược lại (Z -> A)
-      const nameA = String(a.name || '');
-      const nameB = String(b.name || '');
-      return nameB.localeCompare(nameA, 'vi', { sensitivity: 'accent' });
+      // Nếu thời gian khớp hoàn toàn, sắp xếp ổn định theo MSSV
+      return String(a.MSSV || '').localeCompare(String(b.MSSV || ''));
     });
     
   return [...regular, ...late];
@@ -180,7 +182,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
         rooms[currentRoomIdx].students.push(student);
         rooms[currentRoomIdx].genderType = gender;
-        
+
         if (student.isLate) {
           rooms[currentRoomIdx].hasPenalized = true;
         }
@@ -220,7 +222,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           if (data.isLocked === true) {
             setIsRoomLocked(true);
             localStorage.setItem('KTX_IS_ROOM_LOCKED', 'true');
-            
+
             setLockedRoomsData(prev => {
               if (!prev) {
                 const newLockedState = calculateRoomAllocation();
@@ -345,7 +347,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       ...room,
       students: room.students
         .map(lockedStudent => {
-          const freshStudent = students.find(s => 
+          const freshStudent = students.find(s =>
             String(s.MSSV || (s as any).studentId || (s as any).id) === String(lockedStudent.MSSV || (lockedStudent as any).studentId || (lockedStudent as any).id)
           );
           if (!freshStudent || freshStudent.isAbsent || freshStudent.Vang === 'x') {
@@ -462,8 +464,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             )}
           </h2>
           <p>
-            {isRoomLocked 
-              ? 'Phòng đã được khóa cố định. Bấm "Nghỉ" để đánh dấu vắng và ẩn sinh viên khỏi sơ đồ.' 
+            {isRoomLocked
+              ? 'Phòng đã được khóa cố định. Bấm "Nghỉ" để đánh dấu vắng và ẩn sinh viên khỏi sơ đồ.'
               : 'Đang ở chế độ tự động phân phòng. Hãy bấm "Khóa Cố Định Phòng" để hiển thị nút nghỉ.'}
           </p>
         </div>
@@ -743,8 +745,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                       backgroundColor: room.hasPenalized
                         ? '#ef4444'
                         : room.genderType === 'Nữ'
-                        ? '#ec4899'
-                        : '#3b82f6',
+                          ? '#ec4899'
+                          : '#3b82f6',
                     }}
                   />
                 </div>
@@ -755,7 +757,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                   ) : (
                     room.students.map((st: any, idx) => {
                       const studentKey = String(st.MSSV || st.studentId || st.id);
-                      const displayCode = st.MSSV || st.studentId || st.id; 
+                      const displayCode = st.MSSV || st.studentId || st.id;
                       const isLeader = currentLeaderKey === studentKey;
                       const isPenalized = st.isLate;
                       const studentTeacher = st.thayCo || st.HoTen || st.hoTen;
@@ -766,11 +768,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                           key={studentKey + '-' + idx}
                           className={`student-item ${isPenalized ? 'bad-student' : ''}`}
                           style={{
-                            backgroundColor: isLeader 
-                              ? '#fefce8' 
+                            backgroundColor: isLeader
+                              ? '#fefce8'
                               : (selectedTeacherFilter && isTeacherMatch ? '#eff6ff' : undefined),
-                            borderColor: isLeader 
-                              ? '#fde047' 
+                            borderColor: isLeader
+                              ? '#fde047'
                               : (selectedTeacherFilter && isTeacherMatch ? '#bfdbfe' : undefined),
                             opacity: selectedTeacherFilter && !isTeacherMatch ? 0.4 : 1,
                             display: 'flex',
@@ -806,7 +808,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                             {st.isLate && <span className="tag-bad late" style={{ fontSize: '10px', padding: '1px 4px' }}>Trễ</span>}
-                            
+
                             {canManage && isRoomLocked && (
                               <button
                                 type="button"
