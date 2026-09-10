@@ -106,29 +106,27 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     });
     // Cập nhật lại database sinh viên đi trể (ai có thời gian nhỏ hơn thì được ưu tiên đến trước)
     const sortWithinGender = (group: Student[]) => {
-  const regular = group.filter((s) => !s.isLate);
-  
-  // Lọc lấy danh sách trễ và sắp xếp chuẩn theo thời gian tăng dần (ai trước lên trước)
-  const late = group
-    .filter((s) => s.isLate)
-    .sort((a, b) => {
-      const rawA = a.late_at || (a as any).late_at;
-      const rawB = b.late_at || (b as any).late_at;
-      
-      const timeA = rawA ? new Date(String(rawA).replace(' ', 'T')).getTime() : 0;
-      const timeB = rawB ? new Date(String(rawB).replace(' ', 'T')).getTime() : 0;
-      
-      // Sắp xếp thời gian từ nhỏ đến lớn (ai bấm trước / thời gian sớm hơn đứng trên)
-      if (timeA !== timeB) {
-        return timeA - timeB;
-      }
-      
-      // Nếu thời gian khớp hoàn toàn, sắp xếp ổn định theo MSSV
-      return String(a.MSSV || '').localeCompare(String(b.MSSV || ''));
-    });
-    
-  return [...regular, ...late];
-};
+      const regular = group.filter((s) => !s.isLate);
+      const late = group
+        .filter((s) => s.isLate)
+        .sort((a, b) => {
+          const rawA = a.late_at || (a as any).late_at;
+          const rawB = b.late_at || (b as any).late_at;
+
+          const timeA = rawA ? new Date(String(rawA).replace(' ', 'T')).getTime() : 0;
+          const timeB = rawB ? new Date(String(rawB).replace(' ', 'T')).getTime() : 0;
+
+          // Ai có thời gian nhỏ hơn (đến sớm hơn) sẽ đứng trước
+          if (timeA !== timeB) return timeA - timeB;
+
+          // Nếu trùng thời gian, sắp xếp theo tên từ A -> Z
+          const nameA = String(a.name || '');
+          const nameB = String(b.name || '');
+          return nameA.localeCompare(nameB, 'vi', { sensitivity: 'accent' });
+        });
+
+      return [...regular, ...late];
+    };
 
     const sortedFemales = sortWithinGender(allValidStudents.filter((s) => s.gender === 'Nữ'));
     const sortedMales = sortWithinGender(allValidStudents.filter((s) => s.gender !== 'Nữ'));
