@@ -19,6 +19,7 @@ interface HistoryRecord {
   DiTre: string;
   MuonDo?: string;
   GhiChu: string;
+  DiemNeNep?: number | string;
 }
 
 interface CourseHistoryProps {
@@ -78,37 +79,49 @@ export function CourseHistory({ selectedCourseKey: propCourseKey }: CourseHistor
 
       const rows = historyData || [];
 
-      // Lấy danh sách MSSV để query bảng ChamDiem tương ứng
-      const mssvList = rows.map((item: any) => item.MSSV).filter(Boolean);
+      // Lấy danh sách MSSV/MSV từ bảng lịch sử khóa học
+      const mssvList = rows.map((item: any) => item.MSSV || item.MSV || item.MaSV).filter(Boolean);
 
       let chamDiemData: any[] = [];
       if (mssvList.length > 0) {
+        // Lấy dữ liệu từ bảng ChamDiem (sử dụng MSV làm khóa chính)
         const { data: cdData } = await supabase
           .from('ChamDiem')
           .select('*')
-          .in('MSSV', mssvList);
+          .in('MSV', mssvList);
         if (cdData) chamDiemData = cdData;
       }
 
       const ghiChuMap = new Map<string, string>();
+      const diemMap = new Map<string, any>();
+      
       chamDiemData.forEach((cd: any) => {
-        const mssv = (cd.MSSV || cd.MSV || cd.studentId || cd.MaSV || '').trim();
-        if (mssv && cd.GhiChu) {
-          ghiChuMap.set(mssv, cd.GhiChu);
+        const msv = String(cd.MSV || cd.MSSV || '').trim();
+        if (msv) {
+          if (cd.GhiChu) {
+            ghiChuMap.set(msv, cd.GhiChu);
+          }
+          if (cd.DiemNeNep !== undefined && cd.DiemNeNep !== null) {
+            diemMap.set(msv, cd.DiemNeNep);
+          }
         }
       });
       
       const mappedData: HistoryRecord[] = rows.map((item: any) => {
-        const mssv = (item.MSSV || '').trim();
-        let note = ghiChuMap.get(mssv) || item.GhiChu || item.TruongPhong || '';
+        const mssv = String(item.MSSV || item.MSV || item.MaSV || '').trim();
+        let note = ghiChuMap.get(mssv) || item.GhiChu || '';
         
         if (note === 'x' || note === 'X') {
           note = '';
         }
 
+        const diem = diemMap.get(mssv) ?? item.DiemNeNep ?? '';
+
         return {
           ...item,
+          MSSV: mssv,
           GhiChu: note,
+          DiemNeNep: diem,
         };
       });
 
@@ -138,6 +151,7 @@ export function CourseHistory({ selectedCourseKey: propCourseKey }: CourseHistor
       'Vắng': item.Vang ? 'Vắng' : '',
       'Đi Trễ': item.DiTre ? 'Trễ' : '',
       'Mượn Đồ': item.MuonDo || '',
+      'Điểm Nề Nếp': item.DiemNeNep ?? '',
       'Ghi Chú': item.GhiChu || ''
     }));
 
@@ -153,6 +167,7 @@ export function CourseHistory({ selectedCourseKey: propCourseKey }: CourseHistor
       { wch: 10 }, // Vắng
       { wch: 10 }, // Đi Trễ
       { wch: 15 }, // Mượn Đồ
+      { wch: 12 }, // Điểm Nề Nếp
       { wch: 25 }  // Ghi Chú
     ];
     worksheet['!cols'] = colWidths;
@@ -298,13 +313,14 @@ export function CourseHistory({ selectedCourseKey: propCourseKey }: CourseHistor
                     <th className="text-center">VẮNG</th>
                     <th className="text-center">ĐI TRỄ</th>
                     <th>MƯỢN ĐỒ</th>
+                    <th className="text-center">ĐIỂM</th>
                     <th>GHI CHÚ</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredTableData.length === 0 ? (
                     <tr>
-                      <td colSpan={10} style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>
+                      <td colSpan={11} style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>
                         Không tìm thấy dữ liệu sinh viên phù hợp với thông tin đã nhập.
                       </td>
                     </tr>
@@ -324,6 +340,9 @@ export function CourseHistory({ selectedCourseKey: propCourseKey }: CourseHistor
                           {item.DiTre ? '✔' : '-'}
                         </td>
                         <td>{item.MuonDo || '-'}</td>
+                        <td className="text-center font-weight-bold">
+                          {item.DiemNeNep !== undefined && item.DiemNeNep !== '' ? item.DiemNeNep : '-'}
+                        </td>
                         <td>{item.GhiChu || '-'}</td>
                       </tr>
                     ))

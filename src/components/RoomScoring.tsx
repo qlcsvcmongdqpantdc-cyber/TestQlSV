@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ClipboardCheck, Search, ShieldAlert, RefreshCw, FileSpreadsheet, Settings, Trash2, Plus, Filter } from 'lucide-react';
+import { ClipboardCheck, Search, ShieldAlert, RefreshCw, FileSpreadsheet, Settings, Trash2, Plus, Filter, CheckCircle2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import toast, { Toaster } from 'react-hot-toast';
 import { supabase } from '../supabaseClient';
 import type { Student } from '../types/student';
 import type { User } from '../types/auth';
@@ -45,6 +46,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
   const [scores, setScores] = useState<ScoringMap>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
   const [violations, setViolations] = useState<ViolationRule[]>(DEFAULT_VIOLATIONS);
   const [isViolationModalOpen, setIsViolationModalOpen] = useState<boolean>(false);
 
@@ -52,13 +54,11 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
   const [newLabel, setNewLabel] = useState<string>('');
   const [newPenalty, setNewPenalty] = useState<number>(1);
 
-  // --- PHÂN TRANG HIỂN THỊ ĐỂ CHỐNG LAG DOM ---
   const [page, setPage] = useState<number>(1);
   const ITEMS_PER_PAGE = 30;
 
   const canManage = currentUser?.role === 'admin' || currentUser?.can_manage === true;
 
-  // --- LẤY DỮ LIỆU TỪ CỘT 'Phong' VÀ 'ThayCo' (Đã fix quét đa dạng tên thuộc tính) ---
   const processedStudents = useMemo<ScoringStudent[]>(() => {
     if (!students || students.length === 0) return [];
     const activeStudents = (students as ScoringStudent[]).filter((s) => !s.isAbsent);
@@ -137,7 +137,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     fetchData();
   }, []);
 
-  // --- TỐI ƯU HÓA LỌC BẰNG USEMEMO ---
   const filteredStudents = useMemo(() => {
     return processedStudents.filter((s) => {
       const roomMatch = selectedRoom === 'Tất cả' || s.room === selectedRoom;
@@ -151,12 +150,10 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     });
   }, [processedStudents, selectedRoom, selectedTeacher, searchTerm]);
 
-  // Reset trang về 1 mỗi khi đổi bộ lọc
   useEffect(() => {
     setPage(1);
   }, [selectedRoom, selectedTeacher, searchTerm]);
 
-  // Danh sách hiển thị theo trang để chống lag
   const displayedStudents = useMemo(() => {
     return filteredStudents.slice(0, page * ITEMS_PER_PAGE);
   }, [filteredStudents, page]);
@@ -171,35 +168,68 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     return Math.max(0, 10 - totalPenalty);
   };
 
-  const saveToSupabase = async (msv: string, hoVaTen: string, updatedScoresForStudent: Record<number, RecordEntry[]>, noteValue: string) => {
-    if (!canManage) return;
-
-    const finalScore = (() => {
-      let penalty = 0;
-      Object.values(updatedScoresForStudent || {}).forEach((dayData) => {
-        dayData.forEach((item) => { penalty += item.penalty; });
-      });
-      return Math.max(0, 10 - penalty);
-    })();
-
-    const recordPayload: Record<string, any> = {
-      MSV: msv,
-      HoVaTen: hoVaTen,
-      DiemNeNep: finalScore,
-      GhiChu: noteValue || '',
-    };
-
-    for (let day = 1; day <= 10; day++) {
-      const dayViolations = updatedScoresForStudent[day] || [];
-      recordPayload[String(day)] = dayViolations.map((v) => v.displayCode).join(',') || null;
+  // --- HÀM ĐẨY TOÀN BỘ DỮ LIỆU LÊN SUPABASE VỚI TOAST ĐẸP MẮT ---
+  const handleConfirmAndSaveAll = async () => {
+    if (!canManage) {
+      toast.error('Bạn không có quyền thực hiện thao tác này!');
+      return;
     }
 
-    supabase.from('ChamDiem').upsert(recordPayload, { onConflict: 'MSV' }).then(() => {});
+    setSaving(true);
+    const toastId = toast.loading('Đang lưu và đẩy dữ liệu lên cơ sở dữ liệu...');
+
+    try {
+      const payloads = processedStudents.map((st, idx) => {
+        const msv = String(st.studentId || st.id || idx);
+        const hoVaTen = st.name;
+        const roomValue = st.room ? parseInt(st.room, 10) : null;
+        const studentScores = scores[msv] || {};
+        const noteValue = notes[msv] || '';
+
+        let penalty = 0;
+        Object.values(studentScores).forEach((dayData) => {
+          dayData.forEach((item) => { penalty += item.penalty; });
+        });
+        const finalScore = Math.max(0, 10 - penalty);
+
+        const recordPayload: Record<string, any> = {
+          MSV: msv,
+          HoVaTen: hoVaTen,
+          DiemNeNep: finalScore,
+          GhiChu: noteValue,
+          Phong: isNaN(roomValue as number) ? null : roomValue,
+        };
+
+        for (let day = 1; day <= 10; day++) {
+          const dayViolations = studentScores[day] || [];
+          recordPayload[String(day)] = dayViolations.map((v) => v.displayCode).join(',') || null;
+        }
+
+        return recordPayload;
+      });
+
+      const { error } = await supabase.from('ChamDiem').upsert(payloads, { onConflict: 'MSV' });
+
+      if (error) {
+        console.error('Lỗi Supabase:', error.message);
+        toast.error('Lưu dữ liệu thất bại: ' + error.message, { id: toastId });
+      } else {
+        toast.success('Đã xác nhận và đẩy toàn bộ dữ liệu lên cơ sở dữ liệu thành công!', {
+          id: toastId,
+          duration: 4000,
+        });
+      }
+    } catch (err) {
+      console.error('Lỗi kết nối:', err);
+      toast.error('Đã xảy ra lỗi khi kết nối đến cơ sở dữ liệu.', { id: toastId });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleToggleViolation = (student: ScoringStudent, day: number, code: string, displayCode: string, penalty: number) => {
     if (!canManage) {
-      alert('Bạn không có quyền thay đổi điểm nề nếp!');
+      toast.error('Bạn không có quyền thay đổi điểm nề nếp!');
       return;
     }
 
@@ -209,23 +239,19 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
       const dayData = studentData[day] || [];
       const exists = dayData.some((item) => item.code === code);
       const updatedDayData = exists ? dayData.filter((item) => item.code !== code) : [...dayData, { code, displayCode, penalty }];
-      const updatedStudentScores = { ...studentData, [day]: updatedDayData };
-
-      saveToSupabase(studentKey, student.name, updatedStudentScores, notes[studentKey] || '');
-      return { ...prev, [studentKey]: updatedStudentScores };
+      return { ...prev, [studentKey]: { ...studentData, [day]: updatedDayData } };
     });
   };
 
-  const handleNoteBlur = (student: ScoringStudent, newNote: string) => {
+  const handleNoteChange = (student: ScoringStudent, newNote: string) => {
     if (!canManage) return;
     const studentKey = String(student.studentId || student.id);
     setNotes((prev) => ({ ...prev, [studentKey]: newNote }));
-    saveToSupabase(studentKey, student.name, scores[studentKey] || '', newNote);
   };
 
   const handleSelectChange = (student: ScoringStudent, day: number, selectedValue: string, eventTarget: HTMLSelectElement) => {
     if (!canManage) {
-      alert('Bạn không có quyền thực hiện thao tác này!');
+      toast.error('Bạn không có quyền thực hiện thao tác này!');
       eventTarget.value = '';
       return;
     }
@@ -243,7 +269,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
       const penaltyInput = prompt(`Nhập số điểm trừ cho lỗi [${codeInput.trim().toUpperCase()}]:`, '1');
       const penalty = parseFloat(penaltyInput || '1');
       if (isNaN(penalty) || penalty <= 0) {
-        alert('Số điểm trừ không hợp lệ!');
+        toast.error('Số điểm trừ không hợp lệ!');
         eventTarget.value = '';
         return;
       }
@@ -296,7 +322,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     }, { onConflict: 'Code' });
 
     if (error) {
-      alert('Lỗi khi lưu danh mục lên cơ sở dữ liệu!');
+      toast.error('Lỗi khi lưu danh mục lên cơ sở dữ liệu!');
       return;
     }
 
@@ -308,17 +334,18 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     setNewCode('');
     setNewLabel('');
     setNewPenalty(1);
-    alert('Thêm / Cập nhật quy định lỗi thành công!');
+    toast.success('Thêm / Cập nhật quy định lỗi thành công!');
   };
 
   const handleDeleteRule = async (codeToDelete: string) => {
     if (DEFAULT_VIOLATIONS.some(v => v.code === codeToDelete)) {
-      alert('Không thể xóa các lỗi mặc định hệ thống!');
+      toast.error('Không thể xóa các lỗi mặc định hệ thống!');
       return;
     }
     if (confirm(`Bạn có chắc chắn muốn xóa quy định lỗi [${codeToDelete}] không?`)) {
       await supabase.from('ViolationRules').delete().eq('Code', codeToDelete);
       setViolations(prev => prev.filter(v => v.code !== codeToDelete));
+      toast.success('Đã xóa quy định lỗi!');
     }
   };
 
@@ -341,7 +368,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
 
   const handleExportExcel = () => {
     if (!processedStudents || processedStudents.length === 0) {
-      alert('Không có dữ liệu sinh viên để xuất Excel!');
+      toast.error('Không có dữ liệu sinh viên để xuất Excel!');
       return;
     }
 
@@ -405,10 +432,14 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     });
 
     XLSX.writeFile(wb, `Cham_Diem_Ne_Nep_KTX_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    toast.success('Xuất file Excel thành công!');
   };
 
   return (
     <div className="scoring-container">
+      {/* Khai báo Toaster để render popup thông báo đẹp mắt */}
+      <Toaster position="top-right" reverseOrder={false} />
+
       <div className="scoring-header">
         <div className="header-title-wrapper">
           <h2>
@@ -421,6 +452,16 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
         <div className="header-actions">
           {canManage && (
             <>
+              <button
+                onClick={handleConfirmAndSaveAll}
+                disabled={saving}
+                className="btn-export"
+                style={{ backgroundColor: '#16a34a', color: '#fff', fontWeight: 'bold' }}
+                title="Lưu tất cả thay đổi lên cơ sở dữ liệu"
+              >
+                <CheckCircle2 size={16} /> {saving ? 'Đang lưu...' : 'Đã xác nhận xong'}
+              </button>
+
               <button onClick={() => setIsViolationModalOpen(true)} className="btn-export" style={{ backgroundColor: '#4f46e5', color: '#fff' }} title="Quản lý danh mục quy định lỗi">
                 <Settings size={16} /> Quản lý danh mục lỗi
               </button>
@@ -443,7 +484,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
         </div>
       </div>
 
-      {/* BỘ LỌC CHỌN PHÒNG VÀ GIẢNG VIÊN */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
         <div className="room-tabs-container" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <span style={{ alignSelf: 'center', fontWeight: 'bold', fontSize: '13px', color: '#475569', marginRight: '4px' }}>Phòng:</span>
@@ -578,8 +618,8 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
                         <td>
                           <input
                             type="text"
-                            defaultValue={notes[studentKey] || ''}
-                            onBlur={(e) => canManage && handleNoteBlur(st, e.target.value)}
+                            value={notes[studentKey] || ''}
+                            onChange={(e) => handleNoteChange(st, e.target.value)}
                             disabled={!canManage}
                             placeholder="..."
                             className="note-input"
@@ -593,7 +633,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
             </table>
           </div>
 
-          {/* THANH PHÂN TRANG / XEM THÊM */}
           {displayedStudents.length < filteredStudents.length && (
             <div style={{ textAlign: 'center', padding: '16px' }}>
               <button
@@ -651,7 +690,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
         </div>
       </div>
 
-      {/* MODAL QUẢN LÝ DANH MỤC LỖI */}
       {isViolationModalOpen && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -714,7 +752,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
                       <td style={{ padding: '8px', textAlign: 'center' }}>
                         {!DEFAULT_VIOLATIONS.some(def => def.code === v.code) && (
                           <button onClick={() => handleDeleteRule(v.code)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444' }} title="Xóa lỗi">
-                            <Trash2 size= {16} />
+                            <Trash2 size={16} />
                           </button>
                         )}
                       </td>
