@@ -168,7 +168,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     return Math.max(0, 10 - totalPenalty);
   };
 
-  // --- HÀM ĐẨY TOÀN BỘ DỮ LIỆU LÊN SUPABASE VỚI TOAST ĐẸP MẮT ---
+  // --- ĐÃ BỎ LOGIC TỰ ĐỘNG LƯU PHÒNG (LOẠI BỎ TRƯỜNG PHÒNG KHỎI PAYLOAD) ---
   const handleConfirmAndSaveAll = async () => {
     if (!canManage) {
       toast.error('Bạn không có quyền thực hiện thao tác này!');
@@ -182,7 +182,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
       const payloads = processedStudents.map((st, idx) => {
         const msv = String(st.studentId || st.id || idx);
         const hoVaTen = st.name;
-        const roomValue = st.room ? parseInt(st.room, 10) : null;
         const studentScores = scores[msv] || {};
         const noteValue = notes[msv] || '';
 
@@ -197,7 +196,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
           HoVaTen: hoVaTen,
           DiemNeNep: finalScore,
           GhiChu: noteValue,
-          Phong: isNaN(roomValue as number) ? null : roomValue,
         };
 
         for (let day = 1; day <= 10; day++) {
@@ -437,7 +435,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
 
   return (
     <div className="scoring-container">
-      {/* Khai báo Toaster để render popup thông báo đẹp mắt */}
       <Toaster position="top-right" reverseOrder={false} />
 
       <div className="scoring-header">
