@@ -57,9 +57,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     }, 3500);
   };
 
+  // Trạng thái khóa phòng (Ưu tiên đọc từ LocalStorage hoặc đồng bộ)
   const [isRoomLocked, setIsRoomLocked] = useState<boolean>(() => {
-    const savedLock = localStorage.getItem('KTX_IS_ROOM_LOCKED');
-    return savedLock === 'true';
+    return localStorage.getItem('KTX_IS_ROOM_LOCKED') === 'true';
   });
 
   const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(() => {
@@ -74,6 +74,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return null;
   });
 
+  // Tải danh sách giáo viên từ bảng User
   useEffect(() => {
     let isMounted = true;
     const fetchTeachersFromDatabase = async () => {
@@ -115,6 +116,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       : true;
   }, [currentUser]);
 
+  // Hàm tính toán phân phòng tự động dựa trên danh sách sinh viên hiện tại hoặc cột 'Phong' đã lưu sẵn trong CSDL
   const calculateRoomAllocation = useCallback((): Room[] => {
     const allValidStudents = students.filter((s: any) => {
       if (s.isAbsent || s.Vang === 'x' || s.Nghi === 'x') return false;
@@ -228,13 +230,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         .eq('MSSV', studentKey);
 
       if (error) {
-        console.error('Lỗi cập nhật vắng trong Supabase:', error.message);
         showToast('Lỗi cập nhật CSDL: ' + error.message, 'error');
         setIsDeleting(false);
         return;
       }
     } catch (err) {
-      console.error('Lỗi kết nối:', err);
       showToast('Lỗi kết nối mạng.', 'error');
       setIsDeleting(false);
       return;
@@ -290,13 +290,16 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     }
   };
 
-  // 🌟 HÀM XÁC NHẬN & LƯU PHÒNG LÊN SUPABASE
+  // 🌟 NÚT XÁC NHẬN PHÒNG & ĐỒNG BỘ LÊN SUPABASE
   const handleConfirmRoomAllocation = async () => {
     if (!canManage) return;
     setIsSavingRooms(true);
 
     try {
-      for (const room of rooms) {
+      const currentRoomsToSave = calculateRoomAllocation();
+
+      // Cập nhật số phòng (Cột 'Phong') của từng sinh viên trực tiếp vào Supabase
+      for (const room of currentRoomsToSave) {
         for (const st of room.students) {
           const studentKey = String(st.MSSV || (st as any).studentId || st.id);
           const { error } = await supabase
@@ -310,9 +313,15 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         }
       }
 
+      // Khóa và lưu cứng trạng thái phòng vào máy để đồng nhất hiển thị
+      setLockedRoomsData(currentRoomsToSave);
+      setIsRoomLocked(true);
+      localStorage.setItem('KTX_IS_ROOM_LOCKED', 'true');
+      localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(currentRoomsToSave));
+
       if (onUpdateRoomData) {
         const assignments: { studentKey: string; roomNumber: number }[] = [];
-        rooms.forEach((room) => {
+        currentRoomsToSave.forEach((room) => {
           room.students.forEach((st: any) => {
             const studentKey = String(st.MSSV || st.studentId || st.id);
             assignments.push({ studentKey, roomNumber: room.roomNumber });
@@ -321,7 +330,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         onUpdateRoomData(assignments);
       }
 
-      showToast('Đã xác nhận và lưu số phòng vào CSDL thành công!', 'success');
+      showToast('Đã xác nhận, lưu CSDL và đồng bộ số phòng thành công!', 'success');
     } catch (err: any) {
       console.error('Lỗi khi lưu xác nhận phòng:', err);
       showToast('Lỗi khi lưu phân phòng: ' + err.message, 'error');
@@ -453,6 +462,41 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   };
 
   const getRoomsToDisplay = useMemo(() => {
+    // Nếu sinh viên có cột 'Phong' lưu sẵn từ Supabase, ta có thể ưu tiên hiển thị theo cột đó để đồng bộ tự động giữa các thiết bị
+    const hasAnyDbRoomAssigned = students.some((s: any) => s.Phong && String(s.Phong).trim() !== '');
+
+    if (!isRoomLocked && !lockedRoomsData && hasAnyDbRoomAssigned) {
+      // Tự gom nhóm theo cột 'Phong' từ CSDL nếu có
+      let maxRm = INITIAL_ROOMS;
+      students.forEach((s: any) => {
+        const pNum = parseInt(s.Phong, 10);
+        if (!isNaN(pNum) && pNum > maxRm) maxRm = pNum;
+      });
+
+      const dbRooms: Room[] = Array.from({ length: maxRm }, (_, i) => ({
+        roomNumber: i + 1,
+        students: [],
+        genderType: 'Trống',
+        hasPenalized: false,
+      }));
+
+      students.forEach((s: any) => {
+        if (s.isAbsent || s.Vang === 'x' || s.Nghi === 'x') return;
+        const pNum = parseInt(s.Phong, 10);
+        if (!isNaN(pNum) && pNum >= 1 && pNum <= dbRooms.length) {
+          dbRooms[pNum - 1].students.push(s);
+          const g = String(s.gender || s.GioiTinh || '').trim();
+          dbRooms[pNum - 1].genderType = g === 'Nữ' ? 'Nữ' : 'Nam';
+          if (s.isLate || s.DiTre) dbRooms[pNum - 1].hasPenalized = true;
+        }
+      });
+
+      // Nếu có phòng có sinh viên, trả về danh sách đó
+      if (dbRooms.some(r => r.students.length > 0)) {
+        return dbRooms;
+      }
+    }
+
     if (!isRoomLocked || !lockedRoomsData) {
       return calculatedRooms;
     }
@@ -471,7 +515,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         })
         .filter(Boolean) as Student[]
     }));
-  }, [isRoomLocked, lockedRoomsData, calculatedRooms, students]);
+  }, [isRoomLocked, lockedRoomsData, calculatedRooms, students, INITIAL_ROOMS]);
 
   const rooms = getRoomsToDisplay;
 
@@ -597,13 +641,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               </span>
             )}
           </h2>
-          <p>Phân phòng tự động hiển thị trên giao diện.</p>
+          <p>Phân phòng tự động đồng bộ trên hệ thống.</p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           {canManage && (
             <>
-              {/* NÚT XÁC NHẬN PHÒNG */}
               <button
                 type="button"
                 disabled={isSavingRooms}
