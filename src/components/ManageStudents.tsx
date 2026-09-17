@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { supabase } from '../supabaseClient';
 import type { Student } from '../types/student';
 import type { User } from '../types/auth';
@@ -34,9 +34,71 @@ export function ManageStudents({
   // State Modal Thông báo thành công
   const [showSuccessModal, setShowSuccessModal] = useState(false);
 
+  // State Modal Quản lý sinh viên trùng MSSV
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
+  const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
+
   // Danh sách Lớp và danh sách Thầy/Cô
   const classes = Array.from(new Set(students.map((s) => s.className))).filter(Boolean);
   const teachers = Array.from(new Set(students.map((s) => s.thayCo))).filter(Boolean);
+
+  // 🌟 TÍNH TOÁN CÁC MSSV BỊ TRÙNG LẶP
+  const duplicateGroups = useMemo(() => {
+    const map = new Map<string, Student[]>();
+    students.forEach((s) => {
+      const mssv = String(s.studentId || (s as any).MSSV || '').trim();
+      if (!mssv) return;
+      if (!map.has(mssv)) {
+        map.set(mssv, []);
+      }
+      map.get(mssv)!.push(s);
+    });
+
+    const duplicates: { mssv: string; items: Student[] }[] = [];
+    map.forEach((items, mssv) => {
+      if (items.length > 1) {
+        duplicates.push({ mssv, items });
+      }
+    });
+    return duplicates;
+  }, [students]);
+
+  // 🌟 HÀM XỬ LÝ XÓA CÁC BẢN GHI TRÙNG MSSV (CHỈ GIỮ LẠI 1)
+  const handleResolveDuplicates = async () => {
+    if (!canManage) return;
+    try {
+      setIsCleaningDuplicates(true);
+      
+      // Duyệt qua từng nhóm trùng MSSV
+      for (const group of duplicateGroups) {
+        const itemsToDelete = group.items.slice(1);
+        
+        for (const _item of itemsToDelete) {
+          const { error } = await supabase
+            .from('DanhSachSinhVien')
+            .delete()
+            .eq('MSSV', group.mssv);
+
+          if (error) {
+            console.error('Lỗi khi xóa bản ghi trùng MSSV:', error.message);
+          }
+        }
+      }
+
+      alert('Đã dọn dẹp các sinh viên trùng MSSV thành công!');
+      setShowDuplicateModal(false);
+      if (onRefresh) {
+        onRefresh();
+      } else {
+        window.location.reload();
+      }
+    } catch (err: any) {
+      console.error('Lỗi xử lý trùng lặp:', err);
+      alert('Không thể hoàn tất việc xóa trùng: ' + err.message);
+    } finally {
+      setIsCleaningDuplicates(false);
+    }
+  };
 
   // Lọc sinh viên theo từ khóa, lớp và thầy cô
   const filteredStudents = students.filter((student) => {
@@ -63,20 +125,18 @@ export function ManageStudents({
     const targetId = student.id || student.studentId;
     const nextIsLate = !student.isLate;
     const currentTime = nextIsLate ? new Date().toISOString() : null;
-    const diTreVal = nextIsLate ? 'x' : null; // Lưu 'x' vào cột DiTre giống cách dùng MuonDo
+    const diTreVal = nextIsLate ? 'x' : null;
 
-    // 1. Gọi hàm thay đổi state ở component cha
     onToggleAttendance(targetId, 'isLate');
 
     try {
-      // 2. Cập nhật đúng tên cột trong cơ sở dữ liệu của bạn: DiTre và late_at
       const { error } = await supabase
         .from('DanhSachSinhVien')
         .update({
           DiTre: diTreVal,
           late_at: currentTime,
         })
-        .eq('MSSV', student.studentId); // Khớp với cột MSSV trong bảng
+        .eq('MSSV', student.studentId);
 
       if (error) {
         console.error('Lỗi cập nhật late_at lên Supabase:', error.message);
@@ -85,6 +145,7 @@ export function ManageStudents({
       console.error('Lỗi kết nối Supabase khi cập nhật trạng thái trễ:', err);
     }
   };
+
   // 🌟 SAO LƯU DỮ LIỆU SANG 'KhoaHocDaKetThuc' RỒI MỚI XÓA BẢNG 'DanhSachSinhVien'
   const handleConfirmEndCourse = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,14 +160,12 @@ export function ManageStudents({
     try {
       setIsDeleting(true);
 
-      // 1. Đọc toàn bộ danh sách sinh viên hiện tại trong CSDL Supabase
       const { data: currentDbStudents, error: fetchError } = await supabase
         .from('DanhSachSinhVien')
         .select('*');
 
       if (fetchError) throw fetchError;
 
-      // 2. Chuẩn bị dữ liệu lưu vào bảng KhoaHocDaKetThuc
       if (currentDbStudents && currentDbStudents.length > 0) {
         const maKhoaHoc = `${dot.trim().replace(/\s+/g, '')}_${hocKy.trim().replace(/\s+/g, '')}_${namHoc.trim().replace(/\s+/g, '')}`;
 
@@ -126,7 +185,6 @@ export function ManageStudents({
           TruongPhong: s.TruongPhong ? String(s.TruongPhong) : null,
         }));
 
-        // Chèn vào bảng lưu trữ lịch sử
         const { error: insertError } = await supabase
           .from('KhoaHocDaKetThuc')
           .insert(historyPayload);
@@ -134,7 +192,6 @@ export function ManageStudents({
         if (insertError) throw insertError;
       }
 
-      // 3. Tiến hành xóa toàn bộ dữ liệu hiện tại trong bảng DanhSachSinhVien
       const { error: deleteError } = await supabase
         .from('DanhSachSinhVien')
         .delete()
@@ -149,7 +206,6 @@ export function ManageStudents({
         if (deleteAltError) throw deleteAltError;
       }
 
-      // Đóng modal nhập liệu và mở Modal thông báo thành công
       setIsModalOpen(false);
       setShowSuccessModal(true);
 
@@ -161,7 +217,6 @@ export function ManageStudents({
     }
   };
 
-  // Đóng Modal Thành công & Reload dữ liệu
   const handleCloseSuccess = () => {
     setShowSuccessModal(false);
     setDot('');
@@ -186,13 +241,34 @@ export function ManageStudents({
           </p>
         </div>
 
-        {/* THỐNG KÊ & NÚT KẾT THÚC KHÓA HỌC */}
+        {/* THỐNG KÊ & NÚT HÀNH ĐỘNG */}
         <div className="manage-actions">
           <span className="stat-badge total">👥 Tổng: {totalStudents}</span>
           <span className="stat-badge present" style={{ backgroundColor: '#dcfce7', color: '#16a34a' }}>✅ Hiện diện: {presentCount}</span>
           <span className="stat-badge absent">🙅 Vắng: {absentCount}</span>
           <span className="stat-badge late">⏰ Trễ: {lateCount}</span>
           <span className="stat-badge borrow" style={{ backgroundColor: '#fef3c7', color: '#d97706' }}>📦 Mượn đồ: {borrowCount}</span>
+
+          {/* NÚT THÔNG BÁO TRÙNG MSSV (CHỈ HIỆN KHI CÓ TRÙNG) */}
+          {duplicateGroups.length > 0 && canManage && (
+            <button
+              onClick={() => setShowDuplicateModal(true)}
+              style={{
+                backgroundColor: '#fef2f2',
+                color: '#dc2626',
+                border: '1px solid #fca5a5',
+                padding: '8px 14px',
+                borderRadius: '8px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              ⚠️ Trùng MSSV ({duplicateGroups.length})
+            </button>
+          )}
 
           {canManage && (
             <button onClick={() => setIsModalOpen(true)} className="btn-end-course">
@@ -314,6 +390,62 @@ export function ManageStudents({
           </tbody>
         </table>
       </div>
+
+      {/* 🌟 POPUP MODAL XỬ LÝ TRÙNG MSSV */}
+      {showDuplicateModal && (
+        <div className="modal-overlay">
+          <div className="modal-card" style={{ maxWidth: '600px', width: '90%' }}>
+            <div className="modal-header">
+              <div>
+                <h3 className="modal-title">⚠️ Phát hiện Sinh viên Trùng MSSV</h3>
+                <p className="modal-subtitle">Hệ thống tìm thấy các mã sinh viên xuất hiện nhiều lần trong CSDL.</p>
+              </div>
+              <button onClick={() => setShowDuplicateModal(false)} className="modal-close">✕</button>
+            </div>
+
+            <div style={{ maxHeight: '300px', overflowY: 'auto', margin: '16px 0', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px' }}>
+              {duplicateGroups.map((group, idx) => (
+                <div key={idx} style={{ marginBottom: '12px', paddingBottom: '8px', borderBottom: '1px solid #f1f5f9' }}>
+                  <strong>MSSV: {group.mssv}</strong> (Trùng {group.items.length} lần)
+                  <ul style={{ margin: '4px 0 0 20px', fontSize: '13px', color: '#475569' }}>
+                    {group.items.map((it, i) => (
+                      <li key={i}>
+                        {it.name} - Lớp: {it.className || 'Trống'} {i === 0 ? '✨ (Sẽ được giữ lại)' : '❌ (Sẽ bị xóa bớt)'}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                onClick={() => setShowDuplicateModal(false)}
+                className="btn-cancel"
+              >
+                Đóng
+              </button>
+              <button
+                type="button"
+                disabled={isCleaningDuplicates}
+                onClick={handleResolveDuplicates}
+                style={{
+                  backgroundColor: '#dc2626',
+                  color: '#fff',
+                  border: 'none',
+                  padding: '10px 16px',
+                  borderRadius: '8px',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                {isCleaningDuplicates ? 'Đang dọn dẹp...' : 'Xóa bản ghi trùng (Giữ lại 1)'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 1️⃣ POPUP MODAL NHẬP THÔNG TIN KẾT THÚC KHÓA HỌC */}
       {isModalOpen && canManage && (
