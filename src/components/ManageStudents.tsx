@@ -37,6 +37,9 @@ export function ManageStudents({
   // State Modal Quản lý sinh viên trùng MSSV
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
+  
+  // 🌟 State lưu trữ ID của các bản ghi bị trùng mà người dùng muốn XÓA (Key là MSSV, Value là Set chứa các id/index bản ghi muốn xóa)
+  const [selectedToDelete, setSelectedToDelete] = useState<{ [mssv: string]: Set<string> }>({});
 
   // Danh sách Lớp và danh sách Thầy/Cô
   const classes = Array.from(new Set(students.map((s) => s.className))).filter(Boolean);
@@ -63,26 +66,65 @@ export function ManageStudents({
     return duplicates;
   }, [students]);
 
-  // 🌟 HÀM XỬ LÝ XÓA CÁC BẢN GHI TRÙNG MSSV (CHỈ GIỮ LẠI 1)
+  // Khởi tạo mặc định chọn xóa các bản ghi từ item thứ 2 trở đi khi mở modal trùng
+  const handleOpenDuplicateModal = () => {
+    const initialSelection: { [mssv: string]: Set<string> } = {};
+    duplicateGroups.forEach((group) => {
+      const deleteSet = new Set<string>();
+      // Mặc định chọn xóa từ phần tử thứ 2 trở đi
+      group.items.slice(1).forEach((item, idx) => {
+        const uniqueKey = item.id || `${group.mssv}_${idx + 1}`;
+        deleteSet.add(uniqueKey);
+      });
+      initialSelection[group.mssv] = deleteSet;
+    });
+    setSelectedToDelete(initialSelection);
+    setShowDuplicateModal(true);
+  };
+
+  // 🌟 HÀM XỬ LÝ CHỌN/BỎ CHỌN XÓA MỘT BẢN GHI TRONG NHÓM TRÙNG
+  const handleToggleDeleteTarget = (mssv: string, uniqueKey: string) => {
+    setSelectedToDelete((prev) => {
+      const currentSet = new Set(prev[mssv] || []);
+      if (currentSet.has(uniqueKey)) {
+        // Đảm bảo phải giữ lại ít nhất 1 bản ghi trong nhóm
+        if (currentSet.size >= duplicateGroups.find(g => g.mssv === mssv)!.items.length - 1) {
+          // Cho phép bỏ chọn nếu vẫn còn bản ghi khác bị xóa, hoặc chặn nếu muốn ép giữ lại ít nhất 1
+        }
+        currentSet.delete(uniqueKey);
+      } else {
+        currentSet.add(uniqueKey);
+      }
+      return { ...prev, [mssv]: currentSet };
+    });
+  };
+
+  // 🌟 HÀM XỬ LÝ XÓA CÁC BẢN GHI ĐƯỢC CHỌN TRONG POPUP TRÙNG MSSV
   const handleResolveDuplicates = async () => {
     if (!canManage) return;
     try {
       setIsCleaningDuplicates(true);
       
-      // Duyệt qua từng nhóm trùng MSSV
       for (const group of duplicateGroups) {
-        const itemsToDelete = group.items.slice(1);
+        const deleteSet = selectedToDelete[group.mssv] || new Set();
         
-        for (const _item of itemsToDelete) {
-          const { error } = await supabase
-            .from('DanhSachSinhVien')
-            .delete()
-            .eq('MSSV', group.mssv);
-
-          if (error) {
-            console.error('Lỗi khi xóa bản ghi trùng MSSV:', error.message);
+        // Duyệt qua từng item trong nhóm trùng để xem có nằm trong danh sách cần xóa không
+        group.items.forEach(async (item, idx) => {
+          const uniqueKey = item.id || `${group.mssv}_${idx + 1}`;
+          if (deleteSet.has(uniqueKey)) {
+            // Thực hiện xóa bản ghi này dựa trên ID hoặc điều kiện cụ thể
+            let query = supabase.from('DanhSachSinhVien').delete();
+            if (item.id) {
+              query = query.eq('id', item.id);
+            } else {
+              query = query.eq('MSSV', group.mssv).eq('HoVaTen', item.name);
+            }
+            const { error } = await query;
+            if (error) {
+              console.error('Lỗi khi xóa bản ghi trùng MSSV:', error.message);
+            }
           }
-        }
+        });
       }
 
       alert('Đã dọn dẹp các sinh viên trùng MSSV thành công!');
@@ -114,14 +156,10 @@ export function ManageStudents({
   const absentCount = students.filter((s) => s.isAbsent).length;
   const lateCount = students.filter((s) => s.isLate).length;
   const borrowCount = students.filter((s: any) => s.isBorrow).length;
-
-  // 🌟 TÍNH SỐ LƯỢNG HIỆN DIỆN (TỔNG TRỪ VẮNG)
   const presentCount = totalStudents - absentCount;
 
-  // 🌟 XỬ LÝ CLICK CHECKBOX ĐI TRỄ KÈM CẬP NHẬT CSDL SUPABASE CHO CỘT 'late_at'
   const handleLateChange = async (student: Student) => {
     if (!canManage) return;
-
     const targetId = student.id || student.studentId;
     const nextIsLate = !student.isLate;
     const currentTime = nextIsLate ? new Date().toISOString() : null;
@@ -130,36 +168,21 @@ export function ManageStudents({
     onToggleAttendance(targetId, 'isLate');
 
     try {
-      const { error } = await supabase
+      await supabase
         .from('DanhSachSinhVien')
-        .update({
-          DiTre: diTreVal,
-          late_at: currentTime,
-        })
+        .update({ DiTre: diTreVal, late_at: currentTime })
         .eq('MSSV', student.studentId);
-
-      if (error) {
-        console.error('Lỗi cập nhật late_at lên Supabase:', error.message);
-      }
     } catch (err) {
       console.error('Lỗi kết nối Supabase khi cập nhật trạng thái trễ:', err);
     }
   };
 
-  // 🌟 SAO LƯU DỮ LIỆU SANG 'KhoaHocDaKetThuc' RỒI MỚI XÓA BẢNG 'DanhSachSinhVien'
   const handleConfirmEndCourse = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!canManage) {
-      alert('Bạn không có quyền thực hiện thao tác này!');
-      return;
-    }
-
-    if (!dot.trim() || !hocKy.trim() || !namHoc.trim()) return;
+    if (!canManage || !dot.trim() || !hocKy.trim() || !namHoc.trim()) return;
 
     try {
       setIsDeleting(true);
-
       const { data: currentDbStudents, error: fetchError } = await supabase
         .from('DanhSachSinhVien')
         .select('*');
@@ -168,7 +191,6 @@ export function ManageStudents({
 
       if (currentDbStudents && currentDbStudents.length > 0) {
         const maKhoaHoc = `${dot.trim().replace(/\s+/g, '')}_${hocKy.trim().replace(/\s+/g, '')}_${namHoc.trim().replace(/\s+/g, '')}`;
-
         const historyPayload = currentDbStudents.map((s) => ({
           MaKhóaHoc: maKhoaHoc,
           Dot: dot.trim(),
@@ -198,19 +220,12 @@ export function ManageStudents({
         .neq('MSSV', '___NEVER_MATCH___');
 
       if (deleteError) {
-        const { error: deleteAltError } = await supabase
-          .from('DanhSachSinhVien')
-          .delete()
-          .gte('STT', 0);
-
-        if (deleteAltError) throw deleteAltError;
+        await supabase.from('DanhSachSinhVien').delete().gte('STT', 0);
       }
 
       setIsModalOpen(false);
       setShowSuccessModal(true);
-
     } catch (err: any) {
-      console.error('Lỗi khi sao lưu hoặc xóa dữ liệu:', err);
       alert('❌ Lỗi thao tác Supabase: ' + (err.message || 'Không thể hoàn tất thao tác.'));
     } finally {
       setIsDeleting(false);
@@ -222,26 +237,18 @@ export function ManageStudents({
     setDot('');
     setHocKy('');
     setNamHoc('');
-
-    if (onRefresh) {
-      onRefresh();
-    } else {
-      window.location.reload();
-    }
+    if (onRefresh) onRefresh();
+    else window.location.reload();
   };
 
   return (
     <div className="manage-students-container">
-      {/* HEADER TỔNG QUAN */}
       <div className="manage-header">
         <div>
           <h1 className="manage-title">Quản Lý Điểm Danh & Vi Phạm</h1>
-          <p className="manage-subtitle">
-            Tích vắng/đi trễ/mượn đồ để cập nhật trực tiếp lên hệ thống
-          </p>
+          <p className="manage-subtitle">Tích vắng/đi trễ/mượn đồ để cập nhật trực tiếp lên hệ thống</p>
         </div>
 
-        {/* THỐNG KÊ & NÚT HÀNH ĐỘNG */}
         <div className="manage-actions">
           <span className="stat-badge total">👥 Tổng: {totalStudents}</span>
           <span className="stat-badge present" style={{ backgroundColor: '#dcfce7', color: '#16a34a' }}>✅ Hiện diện: {presentCount}</span>
@@ -249,10 +256,9 @@ export function ManageStudents({
           <span className="stat-badge late">⏰ Trễ: {lateCount}</span>
           <span className="stat-badge borrow" style={{ backgroundColor: '#fef3c7', color: '#d97706' }}>📦 Mượn đồ: {borrowCount}</span>
 
-          {/* NÚT THÔNG BÁO TRÙNG MSSV (CHỈ HIỆN KHI CÓ TRÙNG) */}
           {duplicateGroups.length > 0 && canManage && (
             <button
-              onClick={() => setShowDuplicateModal(true)}
+              onClick={handleOpenDuplicateModal}
               style={{
                 backgroundColor: '#fef2f2',
                 color: '#dc2626',
@@ -295,9 +301,7 @@ export function ManageStudents({
         >
           <option value="all">Tất cả giáo viên</option>
           {teachers.map((t) => (
-            <option key={t || ''} value={t || ''}>
-              {t || 'Trống'}
-            </option>
+            <option key={t || ''} value={t || ''}>{t || 'Trống'}</option>
           ))}
         </select>
 
@@ -308,9 +312,7 @@ export function ManageStudents({
         >
           <option value="all">Tất cả các lớp</option>
           {classes.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
+            <option key={c} value={c}>{c}</option>
           ))}
         </select>
       </div>
@@ -391,31 +393,66 @@ export function ManageStudents({
         </table>
       </div>
 
-      {/* 🌟 POPUP MODAL XỬ LÝ TRÙNG MSSV */}
+      {/* 🌟 POPUP MODAL XỬ LÝ TRÙNG MSSV (CHO PHÉP TỰ CHỌN DÒNG XÓA) */}
       {showDuplicateModal && (
         <div className="modal-overlay">
-          <div className="modal-card" style={{ maxWidth: '600px', width: '90%' }}>
+          <div className="modal-card" style={{ maxWidth: '650px', width: '90%' }}>
             <div className="modal-header">
               <div>
-                <h3 className="modal-title">⚠️ Phát hiện Sinh viên Trùng MSSV</h3>
-                <p className="modal-subtitle">Hệ thống tìm thấy các mã sinh viên xuất hiện nhiều lần trong CSDL.</p>
+                <h3 className="modal-title">⚠️ Tùy Chọn Xóa Sinh Viên Trùng MSSV</h3>
+                <p className="modal-subtitle">Tích chọn dòng bạn muốn <b>xóa bỏ</b> cho mỗi mã sinh viên bị trùng.</p>
               </div>
               <button onClick={() => setShowDuplicateModal(false)} className="modal-close">✕</button>
             </div>
 
-            <div style={{ maxHeight: '300px', overflowY: 'auto', margin: '16px 0', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px' }}>
-              {duplicateGroups.map((group, idx) => (
-                <div key={idx} style={{ marginBottom: '12px', paddingBottom: '8px', borderBottom: '1px solid #f1f5f9' }}>
-                  <strong>MSSV: {group.mssv}</strong> (Trùng {group.items.length} lần)
-                  <ul style={{ margin: '4px 0 0 20px', fontSize: '13px', color: '#475569' }}>
-                    {group.items.map((it, i) => (
-                      <li key={i}>
-                        {it.name} - Lớp: {it.className || 'Trống'} {i === 0 ? '✨ (Sẽ được giữ lại)' : '❌ (Sẽ bị xóa bớt)'}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
+            <div style={{ maxHeight: '350px', overflowY: 'auto', margin: '16px 0', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px' }}>
+              {duplicateGroups.map((group, idx) => {
+                const deleteSet = selectedToDelete[group.mssv] || new Set();
+                return (
+                  <div key={idx} style={{ marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid #f1f5f9' }}>
+                    <div style={{ fontWeight: 'bold', color: '#1e293b', marginBottom: '6px' }}>
+                      MSSV: {group.mssv} <span style={{ fontSize: '12px', color: '#64748b' }}>(Trùng {group.items.length} lần)</span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginLeft: '8px' }}>
+                      {group.items.map((it, i) => {
+                        const uniqueKey = it.id || `${group.mssv}_${i + 1}`;
+                        const isMarkedForDelete = deleteSet.has(uniqueKey);
+                        return (
+                          <label
+                            key={uniqueKey}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '8px 12px',
+                              borderRadius: '6px',
+                              backgroundColor: isMarkedForDelete ? '#fef2f2' : '#f8fafc',
+                              border: `1px solid ${isMarkedForDelete ? '#fca5a5' : '#e2e8f0'}`,
+                              cursor: 'pointer',
+                              fontSize: '13px'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <input
+                                type="checkbox"
+                                checked={isMarkedForDelete}
+                                onChange={() => handleToggleDeleteTarget(group.mssv, uniqueKey)}
+                                style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                              />
+                              <span>
+                                <b>{it.name}</b> — Lớp: {it.className || 'Trống'}
+                              </span>
+                            </div>
+                            <span style={{ fontWeight: 600, color: isMarkedForDelete ? '#dc2626' : '#16a34a' }}>
+                              {isMarkedForDelete ? '❌ Sẽ xóa' : '✨ Giữ lại'}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
             <div className="modal-actions">
@@ -440,41 +477,34 @@ export function ManageStudents({
                   cursor: 'pointer'
                 }}
               >
-                {isCleaningDuplicates ? 'Đang dọn dẹp...' : 'Xóa bản ghi trùng (Giữ lại 1)'}
+                {isCleaningDuplicates ? 'Đang xóa...' : 'Xác nhận xóa các dòng đã chọn'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* 1️⃣ POPUP MODAL NHẬP THÔNG TIN KẾT THÚC KHÓA HỌC */}
+      {/* MODAL KẾT THÚC KHÓA HỌC */}
       {isModalOpen && canManage && (
         <div className="modal-overlay">
           <div className="modal-card">
             <div className="modal-header-icon">🎓</div>
-
             <div className="modal-header">
               <div>
                 <h3 className="modal-title">Kết Thúc Khóa Học</h3>
                 <p className="modal-subtitle">Nhập thông tin khóa học để sao lưu lịch sử và làm sạch dữ liệu hiện tại.</p>
               </div>
-              <button onClick={() => setIsModalOpen(false)} className="modal-close">
-                ✕
-              </button>
+              <button onClick={() => setIsModalOpen(false)} className="modal-close">✕</button>
             </div>
 
             <form onSubmit={handleConfirmEndCourse} className="modal-form">
               <div className="modal-warning-card">
                 <span style={{ fontSize: '18px' }}>🚨</span>
-                <div>
-                  <strong>Lưu ý:</strong> Dữ liệu sẽ được lưu trữ tự động vào CSDL Lịch sử trước khi xóa danh sách hiện tại.
-                </div>
+                <div><strong>Lưu ý:</strong> Dữ liệu sẽ được lưu trữ tự động vào CSDL Lịch sử trước khi xóa danh sách hiện tại.</div>
               </div>
 
               <div className="form-group">
-                <label className="form-label">
-                  Đợt <span className="required">*</span>
-                </label>
+                <label className="form-label">Đợt <span className="required">*</span></label>
                 <input
                   type="text"
                   required
@@ -486,9 +516,7 @@ export function ManageStudents({
               </div>
 
               <div className="form-group">
-                <label className="form-label">
-                  Học Kỳ <span className="required">*</span>
-                </label>
+                <label className="form-label">Học Kỳ <span className="required">*</span></label>
                 <input
                   type="text"
                   required
@@ -500,9 +528,7 @@ export function ManageStudents({
               </div>
 
               <div className="form-group">
-                <label className="form-label">
-                  Năm Học <span className="required">*</span>
-                </label>
+                <label className="form-label">Năm Học <span className="required">*</span></label>
                 <input
                   type="text"
                   required
@@ -514,12 +540,7 @@ export function ManageStudents({
               </div>
 
               <div className="modal-actions">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  disabled={isDeleting}
-                  className="btn-cancel"
-                >
+                <button type="button" onClick={() => setIsModalOpen(false)} disabled={isDeleting} className="btn-cancel">
                   Hủy bỏ
                 </button>
                 <button type="submit" disabled={isDeleting} className="btn-delete">
@@ -531,50 +552,20 @@ export function ManageStudents({
         </div>
       )}
 
-      {/* 2️⃣ POPUP MODAL THÔNG BÁO THÀNH CÔNG */}
+      {/* MODAL THÔNG BÁO THÀNH CÔNG */}
       {showSuccessModal && (
         <div className="modal-overlay">
           <div className="modal-card" style={{ textAlign: 'center' }}>
-            <div
-              style={{
-                width: '64px',
-                height: '64px',
-                backgroundColor: '#dcfce7',
-                color: '#16a34a',
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '32px',
-                margin: '0 auto 16px auto'
-              }}
-            >
+            <div style={{ width: '64px', height: '64px', backgroundColor: '#dcfce7', color: '#16a34a', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px', margin: '0 auto 16px auto' }}>
               ✓
             </div>
-
             <h3 style={{ fontSize: '20px', fontWeight: '800', color: '#0f172a', margin: '0 0 8px 0' }}>
               Kết Thúc Khóa Học Thành Công!
             </h3>
-
             <p style={{ fontSize: '14px', color: '#64748b', margin: '0 0 20px 0', lineHeight: '1.5' }}>
               Đã sao lưu thông tin <strong>{dot} - {hocKy} - {namHoc}</strong> vào kho Lịch Sử và làm sạch bảng hiện tại.
             </p>
-
-            <button
-              onClick={handleCloseSuccess}
-              style={{
-                width: '100%',
-                padding: '12px',
-                backgroundColor: '#16a34a',
-                color: '#ffffff',
-                border: 'none',
-                borderRadius: '12px',
-                fontSize: '15px',
-                fontWeight: '700',
-                cursor: 'pointer',
-                boxShadow: '0 4px 12px rgba(22, 163, 74, 0.25)'
-              }}
-            >
+            <button onClick={handleCloseSuccess} style={{ width: '100%', padding: '12px', backgroundColor: '#16a34a', color: '#ffffff', border: 'none', borderRadius: '12px', fontSize: '15px', fontWeight: '700', cursor: 'pointer', boxShadow: '0 4px 12px rgba(22, 163, 74, 0.25)' }}>
               Hoàn tất
             </button>
           </div>
