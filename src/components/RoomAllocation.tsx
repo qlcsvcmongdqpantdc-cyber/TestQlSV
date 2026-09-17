@@ -57,10 +57,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     }, 3500);
   };
 
-  // Trạng thái khóa phòng (Ưu tiên đọc từ LocalStorage hoặc đồng bộ)
-  const [isRoomLocked, setIsRoomLocked] = useState<boolean>(() => {
-    return localStorage.getItem('KTX_IS_ROOM_LOCKED') === 'true';
-  });
+  const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
 
   const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(() => {
     const savedData = localStorage.getItem('KTX_LOCKED_ROOMS_DATA');
@@ -74,7 +71,25 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return null;
   });
 
-  // Tải danh sách giáo viên từ bảng User
+  useEffect(() => {
+    const fetchRoomConfig = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('RoomConfig')
+          .select('isLocked')
+          .eq('id', 1)
+          .maybeSingle();
+
+        if (!error && data) {
+          setIsRoomLocked(!!data.isLocked);
+        }
+      } catch (err) {
+        console.error('Lỗi tải trạng thái RoomConfig:', err);
+      }
+    };
+    fetchRoomConfig();
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
     const fetchTeachersFromDatabase = async () => {
@@ -116,7 +131,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       : true;
   }, [currentUser]);
 
-  // Hàm tính toán phân phòng tự động dựa trên danh sách sinh viên hiện tại hoặc cột 'Phong' đã lưu sẵn trong CSDL
   const calculateRoomAllocation = useCallback((): Room[] => {
     const allValidStudents = students.filter((s: any) => {
       if (s.isAbsent || s.Vang === 'x' || s.Nghi === 'x') return false;
@@ -271,26 +285,45 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const toggleLockRooms = async () => {
     if (!canManage) return;
+    const newLockState = !isRoomLocked;
 
-    if (!isRoomLocked) {
-      const lockedState = calculateRoomAllocation();
-      setLockedRoomsData(lockedState);
-      setIsRoomLocked(true);
+    try {
+      if (newLockState) {
+        const lockedState = calculateRoomAllocation();
+        setLockedRoomsData(lockedState);
+        localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(lockedState));
 
-      localStorage.setItem('KTX_IS_ROOM_LOCKED', 'true');
-      localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(lockedState));
-      showToast('Đã khóa cố định sơ đồ phòng thành công.', 'success');
-    } else {
-      setLockedRoomsData(null);
-      setIsRoomLocked(false);
+        for (const room of lockedState) {
+          for (const st of room.students) {
+            const studentKey = String(st.MSSV || (st as any).studentId || st.id);
+            await supabase
+              .from('DanhSachSinhVien')
+              .update({ Phong: String(room.roomNumber) })
+              .eq('MSSV', studentKey);
+          }
+        }
+      } else {
+        setLockedRoomsData(null);
+        localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
+      }
 
-      localStorage.setItem('KTX_IS_ROOM_LOCKED', 'false');
-      localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
-      showToast('Đã mở khóa sơ đồ phòng.', 'success');
+      const { error } = await supabase
+        .from('RoomConfig')
+        .update({ isLocked: newLockState })
+        .eq('id', 1);
+
+      if (error) {
+        showToast('Lỗi cập nhật trạng thái khóa: ' + error.message, 'error');
+        return;
+      }
+
+      setIsRoomLocked(newLockState);
+      showToast(newLockState ? 'Đã khóa cố định sơ đồ phòng lên hệ thống chung.' : 'Đã mở khóa sơ đồ phòng.', 'success');
+    } catch (err: any) {
+      showToast('Lỗi: ' + err.message, 'error');
     }
   };
 
-  // 🌟 NÚT XÁC NHẬN PHÒNG & ĐỒNG BỘ LÊN SUPABASE
   const handleConfirmRoomAllocation = async () => {
     if (!canManage) return;
     setIsSavingRooms(true);
@@ -298,7 +331,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     try {
       const currentRoomsToSave = calculateRoomAllocation();
 
-      // Cập nhật số phòng (Cột 'Phong') của từng sinh viên trực tiếp vào Supabase
       for (const room of currentRoomsToSave) {
         for (const st of room.students) {
           const studentKey = String(st.MSSV || (st as any).studentId || st.id);
@@ -313,10 +345,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         }
       }
 
-      // Khóa và lưu cứng trạng thái phòng vào máy để đồng nhất hiển thị
+      await supabase
+        .from('RoomConfig')
+        .update({ isLocked: true })
+        .eq('id', 1);
+
       setLockedRoomsData(currentRoomsToSave);
       setIsRoomLocked(true);
-      localStorage.setItem('KTX_IS_ROOM_LOCKED', 'true');
       localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(currentRoomsToSave));
 
       if (onUpdateRoomData) {
@@ -462,11 +497,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   };
 
   const getRoomsToDisplay = useMemo(() => {
-    // Nếu sinh viên có cột 'Phong' lưu sẵn từ Supabase, ta có thể ưu tiên hiển thị theo cột đó để đồng bộ tự động giữa các thiết bị
     const hasAnyDbRoomAssigned = students.some((s: any) => s.Phong && String(s.Phong).trim() !== '');
 
     if (!isRoomLocked && !lockedRoomsData && hasAnyDbRoomAssigned) {
-      // Tự gom nhóm theo cột 'Phong' từ CSDL nếu có
       let maxRm = INITIAL_ROOMS;
       students.forEach((s: any) => {
         const pNum = parseInt(s.Phong, 10);
@@ -491,7 +524,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         }
       });
 
-      // Nếu có phòng có sinh viên, trả về danh sách đó
       if (dbRooms.some(r => r.students.length > 0)) {
         return dbRooms;
       }
@@ -814,18 +846,21 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               <div
                 key={room.roomNumber}
                 className={`room-card ${isEmpty ? 'empty' : ''} ${room.hasPenalized ? 'penalized-room' : ''}`}
-                style={{ position: 'relative' }}
+                style={{ position: 'relative', display: 'flex', flexDirection: 'column', background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '14px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}
               >
-                <div className="room-card-header">
-                  <div className="room-title">
-                    <Home size={18} />
-                    <span>Phòng {room.roomNumber < 10 ? `0${room.roomNumber}` : room.roomNumber}</span>
+                {/* Header tinh chỉnh lại tỉ lệ flex để không bị tràn vỡ */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px', marginBottom: '10px', paddingBottom: '8px', borderBottom: '1px solid #f1f5f9' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Home size={18} color="#3b82f6" />
+                    <span style={{ fontSize: '15px', fontWeight: 700, color: '#1e293b' }}>
+                      Phòng {room.roomNumber < 10 ? `0${room.roomNumber}` : room.roomNumber}
+                    </span>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     {!isEmpty && (
-                      <span className={`gender-tag ${room.genderType === 'Nữ' ? 'nu' : 'nam'}`}>
-                        Phòng {room.genderType}
+                      <span className={`gender-tag ${room.genderType === 'Nữ' ? 'nu' : 'nam'}`} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                        {room.genderType}
                       </span>
                     )}
 
@@ -838,7 +873,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                           setNewStudentMssv('');
                           setNewStudentGender(room.genderType === 'Nữ' ? 'Nữ' : 'Nam');
                         }}
-                        title="Thêm sinh viên mới vào phòng này"
                         style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -853,12 +887,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                           cursor: 'pointer',
                         }}
                       >
-                        <UserPlus2 size={13} />
+                        <UserPlus2 size={12} />
                         <span>Thêm</span>
                       </button>
                     )}
 
-                    {!isEmpty && canManage && (
+                    {canManage && (
                       <button
                         type="button"
                         onClick={() =>
@@ -867,11 +901,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                         style={{
                           display: 'flex',
                           alignItems: 'center',
-                          gap: '4px',
+                          gap: '3px',
                           border: '1px solid #cbd5e1',
                           background: currentLeaderKey ? '#fef9c3' : '#ffffff',
                           color: currentLeaderKey ? '#854d0e' : '#475569',
-                          padding: '3px 8px',
+                          padding: '3px 6px',
                           borderRadius: '6px',
                           fontSize: '11px',
                           fontWeight: 600,
@@ -880,12 +914,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                       >
                         {currentLeaderKey ? (
                           <>
-                            <Crown size={13} color="#eab308" />
+                            <Crown size={12} color="#eab308" />
                             <span>TP</span>
                           </>
                         ) : (
                           <>
-                            <UserCheck size={13} />
+                            <UserCheck size={12} />
                             <span>Xét TP</span>
                           </>
                         )}
@@ -898,7 +932,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                   <div
                     style={{
                       position: 'absolute',
-                      top: '42px',
+                      top: '48px',
                       right: '12px',
                       zIndex: 25,
                       background: '#ffffff',
@@ -912,43 +946,43 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                     <div style={{ fontSize: '12px', fontWeight: 700, color: '#1e293b', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span>THÊM VÀO PHÒNG {room.roomNumber}</span>
                       <button 
-                        type="button" 
+                        type="button"
                         onClick={() => setActiveAddStudentRoom(null)}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', color: '#64748b' }}
                       >
                         ✕
                       </button>
                     </div>
-
+                    
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       <div>
-                        <label style={{ fontSize: '10px', fontWeight: 600, color: '#475569', display: 'block', marginBottom: '2px' }}>Họ và tên</label>
-                        <input
+                        <label style={{ fontSize: '11px', fontWeight: 600, color: '#475569', display: 'block', marginBottom: '2px' }}>Họ và tên:</label>
+                        <input 
                           type="text"
-                          placeholder="Nhập họ tên..."
+                          placeholder="Nhập họ và tên..."
                           value={newStudentName}
                           onChange={(e) => setNewStudentName(e.target.value)}
-                          style={{ width: '100%', padding: '6px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #cbd5e1', outline: 'none' }}
+                          style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '12px', outline: 'none' }}
                         />
                       </div>
 
                       <div>
-                        <label style={{ fontSize: '10px', fontWeight: 600, color: '#475569', display: 'block', marginBottom: '2px' }}>Mã số sinh viên (MSSV)</label>
-                        <input
+                        <label style={{ fontSize: '11px', fontWeight: 600, color: '#475569', display: 'block', marginBottom: '2px' }}>MSSV:</label>
+                        <input 
                           type="text"
                           placeholder="Nhập MSSV..."
                           value={newStudentMssv}
                           onChange={(e) => setNewStudentMssv(e.target.value)}
-                          style={{ width: '100%', padding: '6px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #cbd5e1', outline: 'none' }}
+                          style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '12px', outline: 'none' }}
                         />
                       </div>
 
                       <div>
-                        <label style={{ fontSize: '10px', fontWeight: 600, color: '#475569', display: 'block', marginBottom: '2px' }}>Giới tính</label>
+                        <label style={{ fontSize: '11px', fontWeight: 600, color: '#475569', display: 'block', marginBottom: '2px' }}>Giới tính:</label>
                         <select
                           value={newStudentGender}
                           onChange={(e) => setNewStudentGender(e.target.value as 'Nam' | 'Nữ')}
-                          style={{ width: '100%', padding: '6px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #cbd5e1', background: '#fff', outline: 'none' }}
+                          style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '12px', outline: 'none', background: '#fff' }}
                         >
                           <option value="Nam">Nam</option>
                           <option value="Nữ">Nữ</option>
@@ -962,7 +996,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                         style={{
                           marginTop: '4px',
                           width: '100%',
-                          padding: '7px',
+                          padding: '6px',
                           background: '#2563eb',
                           color: '#fff',
                           border: 'none',
@@ -972,42 +1006,33 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                           cursor: 'pointer'
                         }}
                       >
-                        {isAddingStudent ? 'Đang lưu...' : 'Lưu vào CSDL'}
+                        {isAddingStudent ? 'Đang thêm...' : 'Lưu vào phòng'}
                       </button>
                     </div>
                   </div>
                 )}
 
-                {isDropdownOpen && !isEmpty && canManage && (
+                {isDropdownOpen && (
                   <div
                     style={{
                       position: 'absolute',
-                      top: '42px',
+                      top: '48px',
                       right: '12px',
-                      zIndex: 20,
+                      zIndex: 30,
                       background: '#ffffff',
-                      border: '1px solid #e2e8f0',
+                      border: '1px solid #cbd5e1',
                       borderRadius: '8px',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                      padding: '6px',
-                      minWidth: '200px',
-                      maxHeight: '220px',
-                      overflowY: 'auto',
+                      boxShadow: '0 8px 20px rgba(0,0,0,0.15)',
+                      padding: '8px',
+                      width: '220px',
+                      maxHeight: '260px',
+                      overflowY: 'auto'
                     }}
                   >
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontWeight: 700,
-                        color: '#64748b',
-                        padding: '4px 8px',
-                        borderBottom: '1px solid #f1f5f9',
-                        marginBottom: '4px',
-                      }}
-                    >
-                      CHỌN TRƯỞNG PHÒNG
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', padding: '4px 8px', marginBottom: '4px', borderBottom: '1px solid #f1f5f9' }}>
+                      CHỌN TRƯỞNG PHÒNG {room.roomNumber}
                     </div>
-
+                    
                     {currentLeaderKey && (
                       <button
                         type="button"
@@ -1016,163 +1041,119 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                           width: '100%',
                           textAlign: 'left',
                           padding: '6px 8px',
-                          fontSize: '12px',
-                          color: '#dc2626',
                           background: '#fef2f2',
-                          border: 'none',
+                          color: '#dc2626',
+                          border: '1px solid #fca5a5',
                           borderRadius: '4px',
-                          cursor: 'pointer',
-                          marginBottom: '4px',
+                          fontSize: '12px',
                           fontWeight: 600,
+                          cursor: 'pointer',
+                          marginBottom: '6px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
                         }}
                       >
-                        ✕ Hủy vị trí Trưởng phòng
+                        <UserX size={14} />
+                        <span>Hủy chức vụ trưởng phòng</span>
                       </button>
                     )}
 
-                    {activeRoomStudents.map((st: any, idx: number) => {
-                      const studentKey = String(st.MSSV || st.studentId || st.id);
-                      const isSelected = currentLeaderKey === studentKey;
-                      const studentName = st.HoVaTen || st.name;
+                    {activeRoomStudents.length === 0 ? (
+                      <div style={{ padding: '8px', fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>Phòng chưa có sinh viên</div>
+                    ) : (
+                      activeRoomStudents.map((st: any) => {
+                        const stKey = String(st.MSSV || st.studentId || st.id);
+                        const stName = st.HoVaTen || st.name || 'Không tên';
+                        const isLeader = currentLeaderKey === stKey;
 
-                      return (
-                        <button
-                          key={studentKey + '-' + idx}
-                          type="button"
-                          onClick={() => handleSelectLeader(room.roomNumber, studentKey)}
-                          style={{
-                            width: '100%',
-                            textAlign: 'left',
-                            padding: '6px 8px',
-                            fontSize: '12px',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            background: isSelected ? '#fefce8' : 'transparent',
-                            color: isSelected ? '#854d0e' : '#334155',
-                            fontWeight: isSelected ? 700 : 500,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                          }}
-                        >
-                          <span>
-                            {idx + 1}. {studentName}
-                          </span>
-                          {isSelected && <Crown size={12} color="#eab308" />}
-                        </button>
-                      );
-                    })}
+                        return (
+                          <button
+                            key={stKey}
+                            type="button"
+                            onClick={() => handleSelectLeader(room.roomNumber, stKey)}
+                            style={{
+                              width: '100%',
+                              textAlign: 'left',
+                              padding: '6px 8px',
+                              background: isLeader ? '#fef9c3' : 'transparent',
+                              color: isLeader ? '#854d0e' : '#1e293b',
+                              border: 'none',
+                              borderRadius: '4px',
+                              fontSize: '12px',
+                              fontWeight: isLeader ? 700 : 500,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              marginBottom: '2px'
+                            }}
+                          >
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{stName}</span>
+                            {isLeader && <Crown size={14} color="#eab308" />}
+                          </button>
+                        );
+                      })
+                    )}
                   </div>
                 )}
 
-                <div className="room-capacity">
-                  <span>Sức chứa: <strong>{activeRoomStudents.length}/{MAX_PER_ROOM}</strong></span>
-                  <span className={`status-pill ${isFull ? 'full' : isEmpty ? 'free' : 'available'}`}>
-                    {isFull ? 'Đã Đầy' : isEmpty ? 'Trống' : 'Còn Chỗ'}
-                  </span>
-                </div>
-
-                <div className="progress-bar-bg">
-                  <div
-                    className="progress-bar-fill"
-                    style={{
-                      width: `${(activeRoomStudents.length / MAX_PER_ROOM) * 100}%`,
-                      backgroundColor: room.hasPenalized
-                        ? '#ef4444'
-                        : room.genderType === 'Nữ'
-                          ? '#ec4899'
-                          : '#3b82f6',
-                    }}
-                  />
-                </div>
-
-                <div className="room-student-list">
-                  {room.students.length === 0 ? (
-                    <div className="empty-text">Phòng trống</div>
+                <div className="room-card-body" style={{ flex: 1 }}>
+                  {isEmpty ? (
+                    <div className="empty-room-text" style={{ padding: '20px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>Phòng trống</div>
                   ) : (
-                    room.students.map((st: any, idx) => {
-                      const studentKey = String(st.MSSV || st.studentId || st.id);
-                      const displayCode = st.MSSV || st.studentId || st.id;
-                      const studentName = st.HoVaTen || st.name;
-                      const isLeader = currentLeaderKey === studentKey;
-                      const isPenalized = st.isLate || st.DiTre;
-                      const studentTeacher = st.ThayCo || st.thayCo || st.HoTen || st.hoTen;
-                      const isTeacherMatch = selectedTeacherFilter ? studentTeacher === selectedTeacherFilter : true;
+                    <ul className="student-list" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                      {activeRoomStudents.map((st: any, idx: number) => {
+                        const stKey = String(st.MSSV || st.studentId || st.id);
+                        const isLeader = currentLeaderKey === stKey;
+                        const isLateOrPenalized = st.isLate || st.DiTre;
+                        const studentName = st.HoVaTen || st.name || '---';
+                        const studentMssv = st.MSSV || st.studentId || st.id || '---';
 
-                      return (
-                        <div
-                          key={studentKey + '-' + idx}
-                          className={`student-item ${isPenalized ? 'bad-student' : ''}`}
-                          style={{
-                            backgroundColor: isLeader
-                              ? '#fefce8'
-                              : (selectedTeacherFilter && isTeacherMatch ? '#eff6ff' : undefined),
-                            borderColor: isLeader
-                              ? '#fde047'
-                              : (selectedTeacherFilter && isTeacherMatch ? '#bfdbfe' : undefined),
-                            opacity: selectedTeacherFilter && !isTeacherMatch ? 0.4 : 1,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '8px',
-                            padding: '6px 8px'
-                          }}
-                        >
-                          <div style={{ flex: 1, minWidth: '0' }}>
-                            <span
-                              className="st-name"
-                              style={{
-                                color: isLeader ? '#854d0e' : (isTeacherMatch && selectedTeacherFilter ? '#1e40af' : undefined),
-                                fontWeight: isLeader || (isTeacherMatch && selectedTeacherFilter) ? 700 : undefined,
-                                display: 'block',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap'
-                              }}
-                            >
-                              {isLeader && (
-                                <Crown
-                                  size={14}
-                                  color="#eab308"
-                                  style={{ marginRight: 4, verticalAlign: 'middle' }}
-                                />
+                        return (
+                          <li 
+                            key={stKey || idx} 
+                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 8px', borderRadius: '6px', marginBottom: '3px', background: isLeader ? '#fefce8' : '#f8fafc', border: isLeader ? '1px solid #fde047' : '1px solid #f1f5f9' }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
+                              <span style={{ fontSize: '11px', color: '#64748b', minWidth: '18px', fontWeight: 600 }}>{idx + 1}.</span>
+                              {isLeader && <Crown size={13} color="#eab308" />}
+                              <span style={{ fontSize: '12px', fontWeight: isLeader ? 600 : 500, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {studentName} <span style={{ color: '#64748b', fontSize: '11px' }}>({studentMssv})</span>
+                              </span>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                              {isLateOrPenalized && (
+                                <span style={{ fontSize: '10px', background: '#fee2e2', color: '#dc2626', padding: '1px 4px', borderRadius: '3px', fontWeight: 600 }}>
+                                  Trễ
+                                </span>
                               )}
-                              {idx + 1}. {studentName} ({displayCode})
-                            </span>
-                            {studentTeacher && <span style={{ fontSize: '10px', color: '#64748b' }}>GV: {studentTeacher}</span>}
-                          </div>
 
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                            {isPenalized && <span className="tag-bad late" style={{ fontSize: '10px', padding: '1px 4px' }}>Trễ</span>}
+                              {canManage && (
+                                <button
+                                  type="button"
+                                  onClick={() => setStudentToDelete(st)}
+                                  title="Đánh dấu vắng"
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: '#94a3b8', display: 'flex', alignItems: 'center' }}
+                                >
+                                  <UserX size={13} />
+                                </button>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
 
-                            {canManage && isRoomLocked && (
-                              <button
-                                type="button"
-                                onClick={() => setStudentToDelete(st)}
-                                title="Đánh dấu vắng và ẩn khỏi sơ đồ phòng"
-                                style={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '2px',
-                                  background: '#fef2f2',
-                                  border: '1px solid #f87171',
-                                  color: '#dc2626',
-                                  padding: '2px 6px',
-                                  borderRadius: '4px',
-                                  fontSize: '11px',
-                                  fontWeight: 600,
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                <UserX size={12} />
-                                <span>Nghỉ</span>
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })
+                <div className="room-card-footer" style={{ fontSize: '11px', color: '#64748b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', paddingTop: '8px', borderTop: '1px solid #f1f5f9' }}>
+                  <span>Sĩ số: <strong>{activeRoomStudents.length}</strong>/{MAX_PER_ROOM}</span>
+                  {currentLeaderKey && (
+                    <span style={{ color: '#854d0e', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '2px' }}>
+                      <Crown size={12} color="#eab308" /> Có TP
+                    </span>
                   )}
                 </div>
               </div>
@@ -1186,80 +1167,60 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           position: 'fixed',
           top: 0,
           left: 0,
-          right: 0,
-          bottom: 0,
+          width: '100vw',
+          height: '100vh',
           background: 'rgba(0, 0, 0, 0.5)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000,
-          padding: '16px'
+          zIndex: 99999,
         }}>
           <div style={{
             background: '#ffffff',
-            borderRadius: '12px',
             padding: '24px',
-            maxWidth: '400px',
+            borderRadius: '12px',
             width: '100%',
+            maxWidth: '400px',
             boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
-            border: '1px solid #e2e8f0'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-              <div style={{
-                background: '#fef2f2',
-                padding: '10px',
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#dc2626'
-              }}>
-                <AlertCircle size={24} />
-              </div>
-              <div>
-                <h3 style={{ margin: 0, fontSize: '18px', color: '#1e293b' }}>Xác nhận vắng học</h3>
-                <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#64748b' }}>Hành động này sẽ cập nhật trạng thái vắng</p>
-              </div>
-            </div>
-
-            <p style={{ fontSize: '14px', color: '#334155', marginBottom: '20px', lineHeight: '1.5' }}>
-              Bạn có chắc chắn muốn đánh dấu sinh viên <strong>{(studentToDelete as any).HoVaTen || studentToDelete.name}</strong> ({studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id}) là vắng mặt và ẩn khỏi sơ đồ phòng không?
+            <h3 style={{ margin: '0 0 12px 0', fontSize: '18px', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <AlertCircle color="#dc2626" size={20} />
+              Xác nhận vắng sinh viên
+            </h3>
+            <p style={{ margin: '0 0 20px 0', fontSize: '14px', color: '#475569', lineHeight: '1.5' }}>
+              Bạn có chắc chắn muốn đánh dấu vắng cho sinh viên <strong>{(studentToDelete as any).HoVaTen || studentToDelete.name}</strong> (MSSV: {studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id})? Sinh viên này sẽ bị loại khỏi sơ đồ phòng hiện tại.
             </p>
-
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button
                 type="button"
-                onClick={() => setStudentToDelete(null)}
                 disabled={isDeleting}
+                onClick={() => setStudentToDelete(null)}
                 style={{
                   padding: '8px 16px',
                   borderRadius: '6px',
                   border: '1px solid #cbd5e1',
-                  background: '#ffffff',
-                  color: '#475569',
-                  fontSize: '14px',
+                  background: '#f8fafc',
+                  color: '#334155',
                   fontWeight: 600,
-                  cursor: 'pointer'
+                  fontSize: '14px',
+                  cursor: 'pointer',
                 }}
               >
                 Hủy
               </button>
               <button
                 type="button"
-                onClick={confirmMarkAbsent}
                 disabled={isDeleting}
+                onClick={confirmMarkAbsent}
                 style={{
                   padding: '8px 16px',
                   borderRadius: '6px',
-                  border: '1px solid #dc2626',
+                  border: 'none',
                   background: '#dc2626',
                   color: '#ffffff',
-                  fontSize: '14px',
                   fontWeight: 600,
+                  fontSize: '14px',
                   cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px'
                 }}
               >
                 {isDeleting ? 'Đang xử lý...' : 'Xác nhận vắng'}
