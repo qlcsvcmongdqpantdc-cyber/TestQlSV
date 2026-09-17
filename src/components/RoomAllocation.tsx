@@ -71,6 +71,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return null;
   });
 
+  // Tải trạng thái isLocked trực tiếp từ bảng RoomConfig trên Supabase khi load trang
   useEffect(() => {
     const fetchRoomConfig = async () => {
       try {
@@ -283,44 +284,48 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     showToast(`Đã đánh dấu vắng cho sinh viên ${(studentToDelete as any).HoVaTen || studentToDelete.name}.`, 'success');
   };
 
+  // 🌟 HÀM TOGGLE KHÓA/MỞ KHÓA ĐÃ TỐI ƯU TỐC ĐỘ (DÙNG PROMISE.ALL VÀ CẬP NHẬT TỨC THÌ)
   const toggleLockRooms = async () => {
     if (!canManage) return;
-    const newLockState = !isRoomLocked;
+
+    const targetLockState = !isRoomLocked;
+
+    // Cập nhật giao diện và State ngay lập tức để phản hồi siêu nhanh
+    setIsRoomLocked(targetLockState);
+    showToast(targetLockState ? 'Đã khóa cố định sơ đồ phòng thành công.' : 'Đã mở khóa sơ đồ phòng.', 'success');
 
     try {
-      if (newLockState) {
+      if (targetLockState) {
         const lockedState = calculateRoomAllocation();
         setLockedRoomsData(lockedState);
         localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(lockedState));
 
+        // Gom toàn bộ request cập nhật sinh viên để chạy song song cùng lúc
+        const updatePromises = [];
         for (const room of lockedState) {
           for (const st of room.students) {
             const studentKey = String(st.MSSV || (st as any).studentId || st.id);
-            await supabase
-              .from('DanhSachSinhVien')
-              .update({ Phong: String(room.roomNumber) })
-              .eq('MSSV', studentKey);
+            updatePromises.push(
+              supabase
+                .from('DanhSachSinhVien')
+                .update({ Phong: String(room.roomNumber) })
+                .eq('MSSV', studentKey)
+            );
           }
         }
+        await Promise.all(updatePromises);
       } else {
         setLockedRoomsData(null);
         localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
       }
 
-      const { error } = await supabase
+      // Ghi trạng thái khóa vào bảng RoomConfig
+      await supabase
         .from('RoomConfig')
-        .update({ isLocked: newLockState })
-        .eq('id', 1);
+        .upsert({ id: 1, isLocked: targetLockState });
 
-      if (error) {
-        showToast('Lỗi cập nhật trạng thái khóa: ' + error.message, 'error');
-        return;
-      }
-
-      setIsRoomLocked(newLockState);
-      showToast(newLockState ? 'Đã khóa cố định sơ đồ phòng lên hệ thống chung.' : 'Đã mở khóa sơ đồ phòng.', 'success');
     } catch (err: any) {
-      showToast('Lỗi: ' + err.message, 'error');
+      console.error('Lỗi đồng bộ ngầm:', err);
     }
   };
 
@@ -331,24 +336,23 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     try {
       const currentRoomsToSave = calculateRoomAllocation();
 
+      const updatePromises = [];
       for (const room of currentRoomsToSave) {
         for (const st of room.students) {
           const studentKey = String(st.MSSV || (st as any).studentId || st.id);
-          const { error } = await supabase
-            .from('DanhSachSinhVien')
-            .update({ Phong: String(room.roomNumber) })
-            .eq('MSSV', studentKey);
-
-          if (error) {
-            console.error(`Lỗi cập nhật phòng cho sinh viên ${studentKey}:`, error.message);
-          }
+          updatePromises.push(
+            supabase
+              .from('DanhSachSinhVien')
+              .update({ Phong: String(room.roomNumber) })
+              .eq('MSSV', studentKey)
+          );
         }
       }
+      await Promise.all(updatePromises);
 
       await supabase
         .from('RoomConfig')
-        .update({ isLocked: true })
-        .eq('id', 1);
+        .upsert({ id: 1, isLocked: true });
 
       setLockedRoomsData(currentRoomsToSave);
       setIsRoomLocked(true);
@@ -846,21 +850,18 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               <div
                 key={room.roomNumber}
                 className={`room-card ${isEmpty ? 'empty' : ''} ${room.hasPenalized ? 'penalized-room' : ''}`}
-                style={{ position: 'relative', display: 'flex', flexDirection: 'column', background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '14px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}
+                style={{ position: 'relative' }}
               >
-                {/* Header tinh chỉnh lại tỉ lệ flex để không bị tràn vỡ */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px', marginBottom: '10px', paddingBottom: '8px', borderBottom: '1px solid #f1f5f9' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Home size={18} color="#3b82f6" />
-                    <span style={{ fontSize: '15px', fontWeight: 700, color: '#1e293b' }}>
-                      Phòng {room.roomNumber < 10 ? `0${room.roomNumber}` : room.roomNumber}
-                    </span>
+                <div className="room-card-header">
+                  <div className="room-title">
+                    <Home size={18} />
+                    <span>Phòng {room.roomNumber < 10 ? `0${room.roomNumber}` : room.roomNumber}</span>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     {!isEmpty && (
-                      <span className={`gender-tag ${room.genderType === 'Nữ' ? 'nu' : 'nam'}`} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
-                        {room.genderType}
+                      <span className={`gender-tag ${room.genderType === 'Nữ' ? 'nu' : 'nam'}`}>
+                        Phòng {room.genderType}
                       </span>
                     )}
 
@@ -873,6 +874,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                           setNewStudentMssv('');
                           setNewStudentGender(room.genderType === 'Nữ' ? 'Nữ' : 'Nam');
                         }}
+                        title="Thêm sinh viên mới vào phòng này"
                         style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -887,12 +889,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                           cursor: 'pointer',
                         }}
                       >
-                        <UserPlus2 size={12} />
+                        <UserPlus2 size={13} />
                         <span>Thêm</span>
                       </button>
                     )}
 
-                    {canManage && (
+                    {!isEmpty && canManage && (
                       <button
                         type="button"
                         onClick={() =>
@@ -901,11 +903,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                         style={{
                           display: 'flex',
                           alignItems: 'center',
-                          gap: '3px',
+                          gap: '4px',
                           border: '1px solid #cbd5e1',
                           background: currentLeaderKey ? '#fef9c3' : '#ffffff',
                           color: currentLeaderKey ? '#854d0e' : '#475569',
-                          padding: '3px 6px',
+                          padding: '3px 8px',
                           borderRadius: '6px',
                           fontSize: '11px',
                           fontWeight: 600,
@@ -914,12 +916,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                       >
                         {currentLeaderKey ? (
                           <>
-                            <Crown size={12} color="#eab308" />
+                            <Crown size={13} color="#eab308" />
                             <span>TP</span>
                           </>
                         ) : (
                           <>
-                            <UserCheck size={12} />
+                            <UserCheck size={13} />
                             <span>Xét TP</span>
                           </>
                         )}
@@ -932,7 +934,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                   <div
                     style={{
                       position: 'absolute',
-                      top: '48px',
+                      top: '42px',
                       right: '12px',
                       zIndex: 25,
                       background: '#ffffff',
@@ -1016,7 +1018,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                   <div
                     style={{
                       position: 'absolute',
-                      top: '48px',
+                      top: '42px',
                       right: '12px',
                       zIndex: 30,
                       background: '#ffffff',
@@ -1098,11 +1100,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                   </div>
                 )}
 
-                <div className="room-card-body" style={{ flex: 1 }}>
+                <div className="room-card-body">
                   {isEmpty ? (
-                    <div className="empty-room-text" style={{ padding: '20px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>Phòng trống</div>
+                    <div className="empty-room-text">Phòng trống</div>
                   ) : (
-                    <ul className="student-list" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                    <ul className="student-list">
                       {activeRoomStudents.map((st: any, idx: number) => {
                         const stKey = String(st.MSSV || st.studentId || st.id);
                         const isLeader = currentLeaderKey === stKey;
@@ -1113,12 +1115,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                         return (
                           <li 
                             key={stKey || idx} 
-                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 8px', borderRadius: '6px', marginBottom: '3px', background: isLeader ? '#fefce8' : '#f8fafc', border: isLeader ? '1px solid #fde047' : '1px solid #f1f5f9' }}
+                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 6px', borderRadius: '4px', marginBottom: '2px', background: isLeader ? '#fefce8' : 'transparent' }}
                           >
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
-                              <span style={{ fontSize: '11px', color: '#64748b', minWidth: '18px', fontWeight: 600 }}>{idx + 1}.</span>
+                              <span style={{ fontSize: '11px', color: '#64748b', minWidth: '16px' }}>{idx + 1}.</span>
                               {isLeader && <Crown size={13} color="#eab308" />}
-                              <span style={{ fontSize: '12px', fontWeight: isLeader ? 600 : 500, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              <span style={{ fontSize: '12px', fontWeight: isLeader ? 600 : 400, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {studentName} <span style={{ color: '#64748b', fontSize: '11px' }}>({studentMssv})</span>
                               </span>
                             </div>
@@ -1148,7 +1150,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                   )}
                 </div>
 
-                <div className="room-card-footer" style={{ fontSize: '11px', color: '#64748b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', paddingTop: '8px', borderTop: '1px solid #f1f5f9' }}>
+                <div className="room-card-footer">
                   <span>Sĩ số: <strong>{activeRoomStudents.length}</strong>/{MAX_PER_ROOM}</span>
                   {currentLeaderKey && (
                     <span style={{ color: '#854d0e', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '2px' }}>
