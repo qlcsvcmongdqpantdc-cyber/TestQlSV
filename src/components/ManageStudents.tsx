@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { supabase } from '../supabaseClient';
+import * as XLSX from 'xlsx'; // Import thư viện xuất Excel
 import type { Student } from '../types/student';
 import type { User } from '../types/auth';
 import './ManageStudents.css';
@@ -38,14 +39,14 @@ export function ManageStudents({
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
   
-  // 🌟 State lưu trữ ID của các bản ghi bị trùng mà người dùng muốn XÓA (Key là MSSV, Value là Set chứa các id/index bản ghi muốn xóa)
+  // State lưu trữ ID các bản ghi trùng muốn xóa
   const [selectedToDelete, setSelectedToDelete] = useState<{ [mssv: string]: Set<string> }>({});
 
-  // Danh sách Lớp và danh sách Thầy/Cô
+  // Danh sách Lớp và Thầy/Cô
   const classes = Array.from(new Set(students.map((s) => s.className))).filter(Boolean);
   const teachers = Array.from(new Set(students.map((s) => s.thayCo))).filter(Boolean);
 
-  // 🌟 TÍNH TOÁN CÁC MSSV BỊ TRÙNG LẶP
+  // Tính toán các MSSV bị trùng lặp
   const duplicateGroups = useMemo(() => {
     const map = new Map<string, Student[]>();
     students.forEach((s) => {
@@ -66,12 +67,10 @@ export function ManageStudents({
     return duplicates;
   }, [students]);
 
-  // Khởi tạo mặc định chọn xóa các bản ghi từ item thứ 2 trở đi khi mở modal trùng
   const handleOpenDuplicateModal = () => {
     const initialSelection: { [mssv: string]: Set<string> } = {};
     duplicateGroups.forEach((group) => {
       const deleteSet = new Set<string>();
-      // Mặc định chọn xóa từ phần tử thứ 2 trở đi
       group.items.slice(1).forEach((item, idx) => {
         const uniqueKey = item.id || `${group.mssv}_${idx + 1}`;
         deleteSet.add(uniqueKey);
@@ -82,15 +81,10 @@ export function ManageStudents({
     setShowDuplicateModal(true);
   };
 
-  // 🌟 HÀM XỬ LÝ CHỌN/BỎ CHỌN XÓA MỘT BẢN GHI TRONG NHÓM TRÙNG
   const handleToggleDeleteTarget = (mssv: string, uniqueKey: string) => {
     setSelectedToDelete((prev) => {
       const currentSet = new Set(prev[mssv] || []);
       if (currentSet.has(uniqueKey)) {
-        // Đảm bảo phải giữ lại ít nhất 1 bản ghi trong nhóm
-        if (currentSet.size >= duplicateGroups.find(g => g.mssv === mssv)!.items.length - 1) {
-          // Cho phép bỏ chọn nếu vẫn còn bản ghi khác bị xóa, hoặc chặn nếu muốn ép giữ lại ít nhất 1
-        }
         currentSet.delete(uniqueKey);
       } else {
         currentSet.add(uniqueKey);
@@ -99,7 +93,6 @@ export function ManageStudents({
     });
   };
 
-  // 🌟 HÀM XỬ LÝ XÓA CÁC BẢN GHI ĐƯỢC CHỌN TRONG POPUP TRÙNG MSSV
   const handleResolveDuplicates = async () => {
     if (!canManage) return;
     try {
@@ -108,11 +101,10 @@ export function ManageStudents({
       for (const group of duplicateGroups) {
         const deleteSet = selectedToDelete[group.mssv] || new Set();
         
-        // Duyệt qua từng item trong nhóm trùng để xem có nằm trong danh sách cần xóa không
-        group.items.forEach(async (item, idx) => {
-          const uniqueKey = item.id || `${group.mssv}_${idx + 1}`;
+        for (let i = 0; i < group.items.length; i++) {
+          const item = group.items[i];
+          const uniqueKey = item.id || `${group.mssv}_${i + 1}`;
           if (deleteSet.has(uniqueKey)) {
-            // Thực hiện xóa bản ghi này dựa trên ID hoặc điều kiện cụ thể
             let query = supabase.from('DanhSachSinhVien').delete();
             if (item.id) {
               query = query.eq('id', item.id);
@@ -124,16 +116,13 @@ export function ManageStudents({
               console.error('Lỗi khi xóa bản ghi trùng MSSV:', error.message);
             }
           }
-        });
+        }
       }
 
       alert('Đã dọn dẹp các sinh viên trùng MSSV thành công!');
       setShowDuplicateModal(false);
-      if (onRefresh) {
-        onRefresh();
-      } else {
-        window.location.reload();
-      }
+      if (onRefresh) onRefresh();
+      else window.location.reload();
     } catch (err: any) {
       console.error('Lỗi xử lý trùng lặp:', err);
       alert('Không thể hoàn tất việc xóa trùng: ' + err.message);
@@ -142,7 +131,56 @@ export function ManageStudents({
     }
   };
 
-  // Lọc sinh viên theo từ khóa, lớp và thầy cô
+  // 🌟 HÀM XUẤT FILE EXCEL ĐẸP MẮT
+  const exportToExcel = (data: any[], fileName: string) => {
+    if (!data || data.length === 0) return;
+
+    // Chuyển đổi key dữ liệu sang tiêu đề tiếng Việt thân thiện hơn cho file Excel
+    const formattedData = data.map((item, index) => ({
+      'STT': index + 1,
+      'Mã Khóa Học': item.MaKhóaHoc || '',
+      'Đợt': item.Dot || '',
+      'Học Kỳ': item.HocKy || '',
+      'Năm Học': item.NamHoc || '',
+      'MSSV': item.MSSV || '',
+      'Họ và Tên': item.HoVaTen || '',
+      'Giới Tính': item.GioiTinh || '',
+      'Lớp': item.Lop || '',
+      'Phòng': item.Phong || '',
+      'Vắng': item.Vang || '',
+      'Đi Trễ': item.DiTre || '',
+      'Mượn Đồ': item.MuonDo || '',
+      'Trưởng Phòng': item.TruongPhong || ''
+    }));
+
+    // Tạo worksheet và workbook
+    const worksheet = XLSX.utils.json_to_sheet(formattedData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'DanhSachTongHop');
+
+    // Tự động căn chỉnh độ rộng các cột cho dễ đọc
+    const colWidths = [
+      { wch: 6 },  // STT
+      { wch: 18 }, // Mã Khóa Học
+      { wch: 10 }, // Đợt
+      { wch: 10 }, // Học Kỳ
+      { wch: 15 }, // Năm Học
+      { wch: 12 }, // MSSV
+      { wch: 25 }, // Họ và Tên
+      { wch: 10 }, // Giới Tính
+      { wch: 15 }, // Lớp
+      { wch: 12 }, // Phòng
+      { wch: 8 },  // Vắng
+      { wch: 8 },  // Đi Trễ
+      { wch: 10 }, // Mượn Đồ
+      { wch: 15 }, // Trưởng Phòng
+    ];
+    worksheet['!cols'] = colWidths;
+
+    // Xuất file Excel về máy người dùng
+    XLSX.writeFile(workbook, `${fileName}.xlsx`);
+  };
+
   const filteredStudents = students.filter((student) => {
     const matchSearch =
       student.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -157,25 +195,6 @@ export function ManageStudents({
   const lateCount = students.filter((s) => s.isLate).length;
   const borrowCount = students.filter((s: any) => s.isBorrow).length;
   const presentCount = totalStudents - absentCount;
-
-  const handleLateChange = async (student: Student) => {
-    if (!canManage) return;
-    const targetId = student.id || student.studentId;
-    const nextIsLate = !student.isLate;
-    const currentTime = nextIsLate ? new Date().toISOString() : null;
-    const diTreVal = nextIsLate ? 'x' : null;
-
-    onToggleAttendance(targetId, 'isLate');
-
-    try {
-      await supabase
-        .from('DanhSachSinhVien')
-        .update({ DiTre: diTreVal, late_at: currentTime })
-        .eq('MSSV', student.studentId);
-    } catch (err) {
-      console.error('Lỗi kết nối Supabase khi cập nhật trạng thái trễ:', err);
-    }
-  };
 
   const handleConfirmEndCourse = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -207,6 +226,11 @@ export function ManageStudents({
           TruongPhong: s.TruongPhong ? String(s.TruongPhong) : null,
         }));
 
+        // 🌟 TỰ ĐỘNG XUẤT FILE EXCEL CHO NGƯỜI DÙNG NGAY KHI KẾT THÚC
+        const excelFileName = `TongHop_${dot.trim()}_${hocKy.trim()}_${namHoc.trim().replace(/\s+/g, '_')}`;
+        exportToExcel(historyPayload, excelFileName);
+
+        // Lưu vào bảng lịch sử trên Supabase
         const { error: insertError } = await supabase
           .from('KhoaHocDaKetThuc')
           .insert(historyPayload);
@@ -214,6 +238,7 @@ export function ManageStudents({
         if (insertError) throw insertError;
       }
 
+      // Xóa dữ liệu hiện tại trên Database
       const { error: deleteError } = await supabase
         .from('DanhSachSinhVien')
         .delete()
@@ -370,7 +395,7 @@ export function ManageStudents({
                         type="checkbox"
                         checked={student.isLate || false}
                         disabled={!canManage}
-                        onChange={() => handleLateChange(student)}
+                        onChange={() => canManage && onToggleAttendance(student.id || student.studentId, 'isLate')}
                         className="checkbox-late"
                         style={{ cursor: canManage ? 'pointer' : 'not-allowed' }}
                       />
@@ -393,7 +418,7 @@ export function ManageStudents({
         </table>
       </div>
 
-      {/* 🌟 POPUP MODAL XỬ LÝ TRÙNG MSSV (CHO PHÉP TỰ CHỌN DÒNG XÓA) */}
+      {/* POPUP MODAL XỬ LÝ TRÙNG MSSV */}
       {showDuplicateModal && (
         <div className="modal-overlay">
           <div className="modal-card" style={{ maxWidth: '650px', width: '90%' }}>
@@ -456,11 +481,7 @@ export function ManageStudents({
             </div>
 
             <div className="modal-actions">
-              <button
-                type="button"
-                onClick={() => setShowDuplicateModal(false)}
-                className="btn-cancel"
-              >
+              <button type="button" onClick={() => setShowDuplicateModal(false)} className="btn-cancel">
                 Đóng
               </button>
               <button
@@ -492,7 +513,7 @@ export function ManageStudents({
             <div className="modal-header">
               <div>
                 <h3 className="modal-title">Kết Thúc Khóa Học</h3>
-                <p className="modal-subtitle">Nhập thông tin khóa học để sao lưu lịch sử và làm sạch dữ liệu hiện tại.</p>
+                <p className="modal-subtitle">Nhập thông tin khóa học để sao lưu lịch sử, tải file Excel và làm sạch dữ liệu hiện tại.</p>
               </div>
               <button onClick={() => setIsModalOpen(false)} className="modal-close">✕</button>
             </div>
@@ -500,7 +521,7 @@ export function ManageStudents({
             <form onSubmit={handleConfirmEndCourse} className="modal-form">
               <div className="modal-warning-card">
                 <span style={{ fontSize: '18px' }}>🚨</span>
-                <div><strong>Lưu ý:</strong> Dữ liệu sẽ được lưu trữ tự động vào CSDL Lịch sử trước khi xóa danh sách hiện tại.</div>
+                <div><strong>Lưu ý:</strong> Hệ thống sẽ tự động tải file Excel tổng hợp về máy và lưu trữ vào CSDL Lịch sử trước khi xóa danh sách hiện tại.</div>
               </div>
 
               <div className="form-group">
@@ -544,7 +565,7 @@ export function ManageStudents({
                   Hủy bỏ
                 </button>
                 <button type="submit" disabled={isDeleting} className="btn-delete">
-                  {isDeleting ? 'Đang lưu & xóa...' : 'Đồng Ý & Kết Thúc'}
+                  {isDeleting ? 'Đang xuất file & xử lý...' : 'Đồng Ý & Xuất Excel'}
                 </button>
               </div>
             </form>
@@ -563,7 +584,7 @@ export function ManageStudents({
               Kết Thúc Khóa Học Thành Công!
             </h3>
             <p style={{ fontSize: '14px', color: '#64748b', margin: '0 0 20px 0', lineHeight: '1.5' }}>
-              Đã sao lưu thông tin <strong>{dot} - {hocKy} - {namHoc}</strong> vào kho Lịch Sử và làm sạch bảng hiện tại.
+              Đã tải file Excel, sao lưu thông tin <strong>{dot} - {hocKy} - {namHoc}</strong> vào kho Lịch Sử và làm sạch bảng hiện tại.
             </p>
             <button onClick={handleCloseSuccess} style={{ width: '100%', padding: '12px', backgroundColor: '#16a34a', color: '#ffffff', border: 'none', borderRadius: '12px', fontSize: '15px', fontWeight: '700', cursor: 'pointer', boxShadow: '0 4px 12px rgba(22, 163, 74, 0.25)' }}>
               Hoàn tất
