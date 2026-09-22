@@ -536,7 +536,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
               <thead>
                 <tr>
                   <th className="col-stt">STT</th>
-                  <th className="col-msv">MSV</th>
+                  <th className="col-msv">MSSV</th>
                   <th className="col-name">HỌ VÀ TÊN</th>
                   <th className="col-room">Phòng</th>
                   <th className="col-room">Giảng viên</th>
