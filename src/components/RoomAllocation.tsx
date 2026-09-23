@@ -59,18 +59,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
 
-  const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(() => {
-    const savedData = localStorage.getItem('KTX_LOCKED_ROOMS_DATA');
-    if (savedData) {
-      try {
-        return JSON.parse(savedData);
-      } catch (e) {
-        return null;
-      }
-    }
-    return null;
-  });
-
+  // 1. Tải trạng thái khóa phòng từ bảng RoomConfig trên CSDL khi khởi tạo[cite: 6]
   useEffect(() => {
     const fetchRoomConfig = async () => {
       try {
@@ -88,6 +77,26 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       }
     };
     fetchRoomConfig();
+  }, []);
+
+  // 2. Lắng nghe thay đổi Realtime cho RoomConfig để đồng bộ giữa các máy[cite: 6]
+  useEffect(() => {
+    const channel = supabase
+      .channel('room_allocation_sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'RoomConfig' },
+        (payload: any) => {
+          if (payload.new && typeof payload.new.isLocked === 'boolean') {
+            setIsRoomLocked(payload.new.isLocked);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   useEffect(() => {
@@ -131,6 +140,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       : true;
   }, [currentUser]);
 
+  // Thuật toán chia phòng tự động (khi chưa khóa phòng)
   const calculateRoomAllocation = useCallback((): Room[] => {
     const allValidStudents = students.filter((s: any) => {
       if (s.isAbsent || s.Vang === 'x' || s.Nghi === 'x') return false;
@@ -266,27 +276,16 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       );
     }
 
-    if (isRoomLocked && lockedRoomsData) {
-      const updatedLockedRooms = lockedRoomsData.map(room => ({
-        ...room,
-        students: room.students.filter((st: any) => {
-          const sKey = String(st.MSSV || st.studentId || st.id);
-          return sKey !== studentKey;
-        })
-      }));
-      setLockedRoomsData(updatedLockedRooms);
-      localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(updatedLockedRooms));
-    }
-
     setIsDeleting(false);
     setStudentToDelete(null);
     showToast(`Đã đánh dấu vắng cho sinh viên ${(studentToDelete as any).HoVaTen || studentToDelete.name}.`, 'success');
   };
 
+  // 3. Lấy sơ đồ phòng đồng bộ trực tiếp từ cột Phong trong CSDL[cite: 6]
   const getRoomsToDisplay = useMemo(() => {
     const hasAnyDbRoomAssigned = students.some((s: any) => s.Phong && String(s.Phong).trim() !== '');
 
-    if (!isRoomLocked && !lockedRoomsData && hasAnyDbRoomAssigned) {
+    if (isRoomLocked || hasAnyDbRoomAssigned) {
       let maxRm = INITIAL_ROOMS;
       students.forEach((s: any) => {
         const pNum = parseInt(s.Phong, 10);
@@ -316,29 +315,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       }
     }
 
-    if (!isRoomLocked || !lockedRoomsData) {
-      return calculatedRooms;
-    }
-
-    return lockedRoomsData.map(room => ({
-      ...room,
-      students: room.students
-        .map(lockedStudent => {
-          const freshStudent = students.find((s: any) =>
-            String(s.MSSV || s.studentId || s.id) === String((lockedStudent as any).MSSV || (lockedStudent as any).studentId || (lockedStudent as any).id)
-          );
-          if (!freshStudent || (freshStudent as any).isAbsent || (freshStudent as any).Vang === 'x' || (freshStudent as any).Nghi === 'x') {
-            return null;
-          }
-          return freshStudent;
-        })
-        .filter(Boolean) as Student[]
-    }));
-  }, [isRoomLocked, lockedRoomsData, calculatedRooms, students, INITIAL_ROOMS]);
+    return calculatedRooms;
+  }, [isRoomLocked, calculatedRooms, students, INITIAL_ROOMS]);
 
   const rooms = getRoomsToDisplay;
 
-  // 1. NÚT XÁC NHẬN PHÒNG (Ghi dữ liệu phòng và cập nhật isLocked thành true)
+  // 4. NÚT XÁC NHẬN PHÒNG (Ghi dữ liệu phòng vào CSDL bảng DanhSachSinhVien và bật isLocked)[cite: 6]
   const handleConfirmRoomAllocation = async () => {
     if (!canManage) return;
     setIsSavingRooms(true);
@@ -354,7 +336,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           const { error: updateError } = await supabase
             .from('DanhSachSinhVien')
             .update({ Phong: String(room.roomNumber) })
-            .or(`MSSV.eq.${studentKey},id.eq.${studentKey}`);
+            .eq('MSSV', studentKey);
 
           if (!updateError) {
             successCount++;
@@ -362,7 +344,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         }
       }
 
-      // Cập nhật isLocked thành true trên database bảng RoomConfig[cite: 6]
       const { error: configError } = await supabase
         .from('RoomConfig')
         .upsert({ id: 1, isLocked: true });
@@ -371,9 +352,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         console.error('Lỗi cập nhật RoomConfig:', configError.message);
       }
 
-      setLockedRoomsData(rooms);
       setIsRoomLocked(true);
-      localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(rooms));
 
       if (onUpdateRoomData) {
         const assignments: { studentKey: string; roomNumber: number }[] = [];
@@ -386,7 +365,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         onUpdateRoomData(assignments);
       }
 
-      showToast(`Đã lưu thành công ${successCount} sinh viên và khóa sơ đồ phòng (isLocked: true)!`, 'success');
+      showToast(`Đã lưu thành công ${successCount} sinh viên và khóa sơ đồ phòng trên hệ thống!`, 'success');
     } catch (err: any) {
       console.error('Lỗi khi lưu xác nhận phòng:', err);
       showToast('Lỗi khi lưu phân phòng: ' + err.message, 'error');
@@ -395,11 +374,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     }
   };
 
-  // 2. NÚT KHÓA / MỞ KHÓA PHÒNG (Đổi isLocked qua lại giữa true và false trên database)[cite: 6]
+  // 5. NÚT KHÓA / MỞ KHÓA PHÒNG (Đổi trạng thái isLocked trên CSDL)[cite: 6]
   const toggleLockRooms = async () => {
     if (!canManage) return;
 
-    const targetLockState = !isRoomLocked; // Đảo trạng thái true <-> false[cite: 6]
+    const targetLockState = !isRoomLocked;
 
     try {
       const { error: configError } = await supabase
@@ -415,30 +394,23 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       setIsRoomLocked(targetLockState);
       showToast(
         targetLockState
-          ? 'Đã khóa cố định sơ đồ phòng (isLocked: true).'
-          : 'Đã mở khóa sơ đồ phòng (isLocked: false).',
+          ? 'Đã khóa cố định sơ đồ phòng.'
+          : 'Đã mở khóa sơ đồ phòng.',
         'success'
       );
 
       if (targetLockState) {
-        const lockedState = rooms;
-        setLockedRoomsData(lockedState);
-        localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(lockedState));
-
-        for (const room of lockedState) {
+        for (const room of rooms) {
           for (const st of room.students) {
             const studentKey = String(st.MSSV || (st as any).studentId || st.id);
             if (studentKey && studentKey !== 'undefined') {
               await supabase
                 .from('DanhSachSinhVien')
                 .update({ Phong: String(room.roomNumber) })
-                .or(`MSSV.eq.${studentKey},id.eq.${studentKey}`);
+                .eq('MSSV', studentKey);
             }
           }
         }
-      } else {
-        setLockedRoomsData(null);
-        localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
       }
     } catch (err: any) {
       console.error('Lỗi kết nối:', err);
@@ -547,18 +519,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           return [...prev, newStudentObj];
         }
       });
-    }
-
-    if (isRoomLocked && lockedRoomsData) {
-      const updated = lockedRoomsData.map((r) => {
-        if (r.roomNumber === roomNumber) {
-          const filteredList = r.students.filter((st: any) => String(st.MSSV || st.id) !== mssvClean);
-          return { ...r, students: [...filteredList, newStudentObj] };
-        }
-        return r;
-      });
-      setLockedRoomsData(updated);
-      localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(updated));
     }
 
     setNewStudentName('');
@@ -686,11 +646,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             Sơ Đồ Phòng KTX QPAN ({filteredRooms.length}/{rooms.length} Phòng)
             {isRoomLocked && (
               <span style={{ fontSize: '12px', background: '#fee2e2', color: '#dc2626', padding: '2px 8px', borderRadius: '4px', border: '1px solid #f87171' }}>
-                🔒 Đã khóa sơ đồ (isLocked: true)
+                🔒 Đã khóa sơ đồ phòng
               </span>
             )}
           </h2>
-          <p>Phân phòng tự động đồng bộ trên hệ thống.</p>
+          <p>Phân phòng tự động đồng bộ trên hệ thống cơ sở dữ liệu.</p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
@@ -1233,7 +1193,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                   border: 'none',
                   background: '#dc2626',
                   color: '#ffffff',
-                  fontWeight: 600,
+                  fontWeight: '600',
                   fontSize: '14px',
                   cursor: 'pointer',
                 }}
