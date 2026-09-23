@@ -79,7 +79,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     fetchRoomConfig();
   }, []);
 
-  // 2. Lắng nghe thay đổi Realtime cho RoomConfig để đồng bộ giữa các máy[cite: 6]
+  // 2. Lắng nghe thay đổi Realtime cho RoomConfig[cite: 6]
   useEffect(() => {
     const channel = supabase
       .channel('room_allocation_sync')
@@ -140,7 +140,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       : true;
   }, [currentUser]);
 
-  // Thuật toán chia phòng tự động (khi chưa khóa phòng)
+  // Thuật toán chia phòng tự động (khi chưa có dữ liệu gán phòng cố định)
   const calculateRoomAllocation = useCallback((): Room[] => {
     const allValidStudents = students.filter((s: any) => {
       if (s.isAbsent || s.Vang === 'x' || s.Nghi === 'x') return false;
@@ -281,7 +281,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     showToast(`Đã đánh dấu vắng cho sinh viên ${(studentToDelete as any).HoVaTen || studentToDelete.name}.`, 'success');
   };
 
-  // 3. Lấy sơ đồ phòng đồng bộ trực tiếp từ cột Phong trong CSDL[cite: 6]
+  // 3. Lấy sơ đồ phòng cố định theo cột Phong, ẩn sinh viên vắng nhưng KHÔNG đôn phòng lên[cite: 6]
   const getRoomsToDisplay = useMemo(() => {
     const hasAnyDbRoomAssigned = students.some((s: any) => s.Phong && String(s.Phong).trim() !== '');
 
@@ -300,9 +300,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       }));
 
       students.forEach((s: any) => {
-        if (s.isAbsent || s.Vang === 'x' || s.Nghi === 'x') return;
         const pNum = parseInt(s.Phong, 10);
         if (!isNaN(pNum) && pNum >= 1 && pNum <= dbRooms.length) {
+          // Bỏ qua sinh viên vắng/nghỉ, giữ nguyên vị trí các sinh viên khác không bị đôn lên
+          if (s.isAbsent || s.Vang === 'x' || s.Nghi === 'x') {
+            return;
+          }
+
           dbRooms[pNum - 1].students.push(s);
           const g = String(s.gender || s.GioiTinh || '').trim();
           dbRooms[pNum - 1].genderType = g === 'Nữ' ? 'Nữ' : 'Nam';
@@ -320,7 +324,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const rooms = getRoomsToDisplay;
 
-  // 4. NÚT XÁC NHẬN PHÒNG (Ghi dữ liệu phòng vào CSDL bảng DanhSachSinhVien và bật isLocked)[cite: 6]
+  // 4. NÚT XÁC NHẬN PHÒNG (Lưu trực tiếp số phòng vào CSDL và khóa sơ đồ)[cite: 6]
   const handleConfirmRoomAllocation = async () => {
     if (!canManage) return;
     setIsSavingRooms(true);
@@ -374,7 +378,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     }
   };
 
-  // 5. NÚT KHÓA / MỞ KHÓA PHÒNG (Đổi trạng thái isLocked trên CSDL)[cite: 6]
+  // 5. NÚT KHÓA / MỞ KHÓA PHÒNG[cite: 6]
   const toggleLockRooms = async () => {
     if (!canManage) return;
 
@@ -1163,7 +1167,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               Xác nhận vắng sinh viên
             </h3>
             <p style={{ margin: '0 0 20px 0', fontSize: '14px', color: '#475569', lineHeight: '1.5' }}>
-              Bạn có chắc chắn muốn đánh dấu vắng cho sinh viên <strong>{(studentToDelete as any).HoVaTen || studentToDelete.name}</strong> (MSSV: {studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id})? Sinh viên này sẽ bị loại khỏi sơ đồ phòng hiện tại.
+              Bạn có chắc chắn muốn đánh dấu vắng cho sinh viên <strong>{(studentToDelete as any).HoVaTen || studentToDelete.name}</strong> (MSSV: {studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id})? Sinh viên này sẽ bị ẩn khỏi phòng hiện tại nhưng không làm xáo trộn vị trí các sinh viên khác.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button
