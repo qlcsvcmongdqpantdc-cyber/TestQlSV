@@ -131,11 +131,10 @@ export function ManageStudents({
     }
   };
 
-  // 🌟 HÀM XUẤT FILE EXCEL ĐẸP MẮT
+  // 🌟 HÀM XUẤT FILE EXCEL ĐẸP MẮT (Đã bổ sung cột Điểm Nề Nếp)
   const exportToExcel = (data: any[], fileName: string) => {
     if (!data || data.length === 0) return;
 
-    // Chuyển đổi key dữ liệu sang tiêu đề tiếng Việt thân thiện hơn cho file Excel
     const formattedData = data.map((item, index) => ({
       'STT': index + 1,
       'Mã Khóa Học': item.MaKhóaHoc || '',
@@ -147,18 +146,17 @@ export function ManageStudents({
       'Giới Tính': item.GioiTinh || '',
       'Lớp': item.Lop || '',
       'Phòng': item.Phong || '',
+      'Điểm Nề Nếp': item.DiemNeNep ?? '', // 🌟 Thêm cột Điểm Nề Nếp ở đây
       'Vắng': item.Vang || '',
       'Đi Trễ': item.DiTre || '',
       'Mượn Đồ': item.MuonDo || '',
       'Trưởng Phòng': item.TruongPhong || ''
     }));
 
-    // Tạo worksheet và workbook
     const worksheet = XLSX.utils.json_to_sheet(formattedData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'DanhSachTongHop');
 
-    // Tự động căn chỉnh độ rộng các cột cho dễ đọc
     const colWidths = [
       { wch: 6 },  // STT
       { wch: 18 }, // Mã Khóa Học
@@ -170,6 +168,7 @@ export function ManageStudents({
       { wch: 10 }, // Giới Tính
       { wch: 15 }, // Lớp
       { wch: 12 }, // Phòng
+      { wch: 15 }, // Điểm Nề Nếp 🌟
       { wch: 8 },  // Vắng
       { wch: 8 },  // Đi Trễ
       { wch: 10 }, // Mượn Đồ
@@ -177,7 +176,6 @@ export function ManageStudents({
     ];
     worksheet['!cols'] = colWidths;
 
-    // Xuất file Excel về máy người dùng
     XLSX.writeFile(workbook, `${fileName}.xlsx`);
   };
 
@@ -202,35 +200,61 @@ export function ManageStudents({
 
     try {
       setIsDeleting(true);
+      
+      // 1. Lấy danh sách sinh viên hiện tại
       const { data: currentDbStudents, error: fetchError } = await supabase
         .from('DanhSachSinhVien')
         .select('*');
 
       if (fetchError) throw fetchError;
 
+      // 🌟 2. Lấy dữ liệu điểm nề nếp từ bảng ChamDiem (dựa vào cột MSV giống MSSV)
+      const { data: chamDiemData, error: chamDiemError } = await supabase
+        .from('ChamDiem')
+        .select('MSV, DiemNeNep');
+
+      if (chamDiemError) {
+        console.error('Không thể lấy dữ liệu bảng ChamDiem:', chamDiemError.message);
+      }
+
+      // Tạo một Map để tra cứu điểm nề nếp nhanh hơn theo MSSV/MSV
+      const diemMap = new Map<string, any>();
+      if (chamDiemData) {
+        chamDiemData.forEach((row) => {
+          if (row.MSV) {
+            diemMap.set(String(row.MSV).trim(), row.DiemNeNep);
+          }
+        });
+      }
+
       if (currentDbStudents && currentDbStudents.length > 0) {
         const maKhoaHoc = `${dot.trim().replace(/\s+/g, '')}_${hocKy.trim().replace(/\s+/g, '')}_${namHoc.trim().replace(/\s+/g, '')}`;
-        const historyPayload = currentDbStudents.map((s) => ({
-          MaKhóaHoc: maKhoaHoc,
-          Dot: dot.trim(),
-          HocKy: hocKy.trim(),
-          NamHoc: namHoc.trim(),
-          MSSV: s.MSSV || s.MSV || s.studentId || '',
-          HoVaTen: s.HoVaTen || s.Ten || s.name || '',
-          GioiTinh: s.GioiTinh || s.gender || 'Nam',
-          Lop: s.Lop || s.className || '',
-          Phong: s.Phong || s.TenPhong || s.room || null,
-          Vang: s.Vang ? String(s.Vang) : null,
-          DiTre: s.DiTre ? String(s.DiTre) : null,
-          MuonDo: s.MuonDo ? String(s.MuonDo) : null,
-          TruongPhong: s.TruongPhong ? String(s.TruongPhong) : null,
-        }));
+        
+        const historyPayload = currentDbStudents.map((s) => {
+          const mssvVal = String(s.MSSV || s.MSV || s.studentId || '').trim();
+          return {
+            MaKhóaHoc: maKhoaHoc,
+            Dot: dot.trim(),
+            HocKy: hocKy.trim(),
+            NamHoc: namHoc.trim(),
+            MSSV: mssvVal,
+            HoVaTen: s.HoVaTen || s.Ten || s.name || '',
+            GioiTinh: s.GioiTinh || s.gender || 'Nam',
+            Lop: s.Lop || s.className || '',
+            Phong: s.Phong || s.TenPhong || s.room || null,
+            DiemNeNep: diemMap.has(mssvVal) ? diemMap.get(mssvVal) : (s.DiemNeNep ?? null), // 🌟 Gán điểm nề nếp
+            Vang: s.Vang ? String(s.Vang) : null,
+            DiTre: s.DiTre ? String(s.DiTre) : null,
+            MuonDo: s.MuonDo ? String(s.MuonDo) : null,
+            TruongPhong: s.TruongPhong ? String(s.TruongPhong) : null,
+          };
+        });
 
-        // 🌟 TỰ ĐỘNG XUẤT FILE EXCEL CHO NGƯỜI DÙNG NGAY KHI KẾT THÚC
+        // 🌟 TỰ ĐỘNG XUẤT FILE EXCEL CÓ CỘT ĐIỂM NỀ NẾP CHO NGƯỜI DÙNG NGAY KHI KẾT THÚC
         const excelFileName = `TongHop_${dot.trim()}_${hocKy.trim()}_${namHoc.trim().replace(/\s+/g, '_')}`;
         exportToExcel(historyPayload, excelFileName);
 
-        // Lưu vào bảng lịch sử trên Supabase
+        // Lưu vào bảng lịch sử trên Supabase (Đảm bảo bảng KhoaHocDaKetThuc đã có cột DiemNeNep)
         const { error: insertError } = await supabase
           .from('KhoaHocDaKetThuc')
           .insert(historyPayload);
@@ -268,6 +292,7 @@ export function ManageStudents({
 
   return (
     <div className="manage-students-container">
+      {/* Phần giao diện giữ nguyên như cũ */}
       <div className="manage-header">
         <div>
           <h1 className="manage-title">Quản Lý Điểm Danh & Vi Phạm</h1>
