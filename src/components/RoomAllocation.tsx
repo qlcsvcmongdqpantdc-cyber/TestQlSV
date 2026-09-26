@@ -88,10 +88,40 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         'postgres_changes',
         { event: '*', schema: 'public', table: 'DanhSachSinhVien' },
         async () => {
-          if (setStudents) {
-            const { data, error } = await supabase.from('DanhSachSinhVien').select('*');
-            if (!error && data) {
-              setStudents(data as unknown as Student[]);
+          const { data, error } = await supabase.from('DanhSachSinhVien').select('*');
+          if (!error && data) {
+            const fetchedStudents = data as unknown as Student[];
+            if (setStudents) {
+              setStudents(fetchedStudents);
+            }
+            
+            const savedLock = localStorage.getItem('KTX_IS_ROOM_LOCKED') === 'true';
+            if (savedLock) {
+              setLockedRoomsData(prevRooms => {
+                if (!prevRooms) return null;
+                const maxRoomNum = Math.max(...prevRooms.map(r => r.roomNumber), 20);
+                const updatedRooms: Room[] = Array.from({ length: maxRoomNum }, (_, i) => {
+                  const rNum = i + 1;
+                  const roomStudents = fetchedStudents.filter((s: any) => Number(s.Phong) === rNum && !s.isAbsent && s.Vang !== 'x');
+                  const existingOldRoom = prevRooms.find(r => r.roomNumber === rNum);
+                  
+                  let gender: 'Nữ' | 'Nam' | 'Trống' = 'Trống';
+                  if (roomStudents.length > 0) {
+                    gender = (roomStudents[0] as any).GioiTinh === 'Nữ' ? 'Nữ' : 'Nam';
+                  } else if (existingOldRoom) {
+                    gender = existingOldRoom.genderType;
+                  }
+
+                  return {
+                    roomNumber: rNum,
+                    students: roomStudents,
+                    genderType: gender,
+                    hasPenalized: false
+                  };
+                });
+                localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(updatedRooms));
+                return updatedRooms;
+              });
             }
           }
         }
