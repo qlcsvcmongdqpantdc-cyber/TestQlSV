@@ -42,7 +42,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [isSavingRooms, setIsSavingRooms] = useState<boolean>(false);
 
-  // Trạng thái modal thêm sinh viên theo phòng cụ thể (bao gồm trường Lop)
+  // Trạng thái modal thêm sinh viên theo phòng cụ thể
   const [isAddStudentOpen, setIsAddStudentOpen] = useState<boolean>(false);
   const [targetRoomForAdd, setTargetRoomForAdd] = useState<number | null>(null);
   const [newStudentForm, setNewStudentForm] = useState({
@@ -64,22 +64,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     }, 3500);
   };
 
-  const [isRoomLocked, setIsRoomLocked] = useState<boolean>(() => {
-    const savedLock = localStorage.getItem('KTX_IS_ROOM_LOCKED');
-    return savedLock === 'true';
-  });
-
-  const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(() => {
-    const savedData = localStorage.getItem('KTX_LOCKED_ROOMS_DATA');
-    if (savedData) {
-      try {
-        return JSON.parse(savedData);
-      } catch (e) {
-        return null;
-      }
-    }
-    return null;
-  });
+  // Quản lý trạng thái khóa phòng hoàn toàn bằng State (Không dùng localStorage)
+  const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
+  const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(null);
 
   const calculateRoomAllocation = useCallback((): Room[] => {
     const allValidStudents = students.filter((s: any) => {
@@ -164,7 +151,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return calculateRoomAllocation();
   }, [calculateRoomAllocation]);
 
-  // Lắng nghe thay đổi dữ liệu thời gian thực từ Supabase để đồng bộ giữa các thiết bị
+  // Lắng nghe thay đổi dữ liệu thời gian thực từ Supabase
   useEffect(() => {
     const channel = supabase
       .channel('schema-db-changes')
@@ -178,16 +165,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               const freshStudents = data as unknown as Student[];
               setStudents(freshStudents);
 
-              // Nếu phòng đang khóa, tự động cập nhật lại lockedRoomsData từ dữ liệu mới trên DB để đồng bộ các máy khác
               if (isRoomLocked) {
-                setLockedRoomsData(prevLocked => {
-                  if (!prevLocked) return null;
-                  
-                  // Cập nhật lại danh sách sinh viên theo phòng dựa trên thuộc tính 'Phong' hoặc tính lại từ đầu
-                  const updatedRooms = calculateRoomAllocation();
-                  localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(updatedRooms));
-                  return updatedRooms;
-                });
+                const updatedRooms = calculateRoomAllocation();
+                setLockedRoomsData(updatedRooms);
               }
             }
           }
@@ -200,10 +180,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           const { data, error } = await supabase.from('RoomConfig').select('*').single();
           if (!error && data) {
             setIsRoomLocked(data.isLocked);
-            localStorage.setItem('KTX_IS_ROOM_LOCKED', String(data.isLocked));
             if (!data.isLocked) {
               setLockedRoomsData(null);
-              localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
+            } else {
+              setLockedRoomsData(calculateRoomAllocation());
             }
           }
         }
@@ -259,6 +239,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       : true;
   }, [currentUser]);
 
+  // Kiểm tra trạng thái khóa phòng từ RoomConfig khi khởi chạy
   useEffect(() => {
     let isMounted = true;
     const checkRoomLockStatus = async () => {
@@ -277,20 +258,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         if (data && isMounted) {
           if (data.isLocked === true) {
             setIsRoomLocked(true);
-            localStorage.setItem('KTX_IS_ROOM_LOCKED', 'true');
-
-            setLockedRoomsData(prev => {
-              if (!prev) {
-                const newLockedState = calculateRoomAllocation();
-                localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(newLockedState));
-                return newLockedState;
-              }
-              return prev;
-            });
+            setLockedRoomsData(calculateRoomAllocation());
           } else {
             setIsRoomLocked(false);
-            localStorage.setItem('KTX_IS_ROOM_LOCKED', 'false');
-            localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
             setLockedRoomsData(null);
           }
         }
@@ -406,7 +376,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         setStudents((prev) => {
           const updated = [...prev, studentDataToInsert as unknown as Student];
           
-          // Nếu đang khóa phòng, cập nhật trực tiếp vào lockedRoomsData để hiển thị ngay lập tức
           if (isRoomLocked) {
             const updatedLockedRooms = (lockedRoomsData || calculatedRooms).map(room => {
               if (room.roomNumber === targetRoomForAdd) {
@@ -422,7 +391,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               return room;
             });
             setLockedRoomsData(updatedLockedRooms);
-            localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(updatedLockedRooms));
           }
 
           return updated;
@@ -496,7 +464,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         })
       }));
       setLockedRoomsData(updatedLockedRooms);
-      localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(updatedLockedRooms));
     }
 
     setIsDeleting(false);
@@ -512,9 +479,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       setLockedRoomsData(lockedState);
       setIsRoomLocked(true);
 
-      localStorage.setItem('KTX_IS_ROOM_LOCKED', 'true');
-      localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(lockedState));
-
       try {
         await supabase.from('RoomConfig').upsert({ id: 1, isLocked: true });
         showToast('Đã khóa cố định sơ đồ phòng thành công.', 'success');
@@ -524,9 +488,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     } else {
       setLockedRoomsData(null);
       setIsRoomLocked(false);
-
-      localStorage.setItem('KTX_IS_ROOM_LOCKED', 'false');
-      localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
 
       try {
         await supabase.from('RoomConfig').upsert({ id: 1, isLocked: false });
@@ -661,7 +622,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             Sơ Đồ Phòng KTX QPAN ({filteredRooms.length}/{rooms.length} Phòng)
             {isRoomLocked && (
               <span style={{ fontSize: '12px', background: '#fee2e2', color: '#dc2626', padding: '2px 8px', borderRadius: '4px', border: '1px solid #f87171' }}>
-                🔒 Đã khóa sơ đồ (Giữ nguyên vị trí phòng)
+                🔒 Đã khóa sơ đồ (Đồng bộ Realtime)
               </span>
             )}
           </h2>
