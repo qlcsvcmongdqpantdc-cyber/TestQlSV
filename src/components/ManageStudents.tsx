@@ -71,6 +71,7 @@ export function ManageStudents({
     const initialSelection: { [mssv: string]: Set<string> } = {};
     duplicateGroups.forEach((group) => {
       const deleteSet = new Set<string>();
+      // Mặc định tích chọn xóa từ phần tử thứ 2 trở đi, giữ lại phần tử đầu tiên
       group.items.slice(1).forEach((item, idx) => {
         const uniqueKey = item.id || `${group.mssv}_${idx + 1}`;
         deleteSet.add(uniqueKey);
@@ -93,6 +94,7 @@ export function ManageStudents({
     });
   };
 
+  // 🌟 ĐÃ SỬA: Hàm xử lý xóa các dòng trùng MSSV chuẩn xác qua ID hoặc Fallback
   const handleResolveDuplicates = async () => {
     if (!canManage) return;
     try {
@@ -104,16 +106,28 @@ export function ManageStudents({
         for (let i = 0; i < group.items.length; i++) {
           const item = group.items[i];
           const uniqueKey = item.id || `${group.mssv}_${i + 1}`;
+          
           if (deleteSet.has(uniqueKey)) {
-            let query = supabase.from('DanhSachSinhVien').delete();
             if (item.id) {
-              query = query.eq('id', item.id);
+              const { error } = await supabase
+                .from('DanhSachSinhVien')
+                .delete()
+                .eq('id', item.id);
+                
+              if (error) {
+                console.error(`Lỗi xóa bản ghi ID ${item.id}:`, error.message);
+              }
             } else {
-              query = query.eq('MSSV', group.mssv).eq('HoVaTen', item.name);
-            }
-            const { error } = await query;
-            if (error) {
-              console.error('Lỗi khi xóa bản ghi trùng MSSV:', error.message);
+              // Fallback trường hợp không có id
+              const { error } = await supabase
+                .from('DanhSachSinhVien')
+                .delete()
+                .eq('MSSV', group.mssv)
+                .eq('HoVaTen', item.name);
+                
+              if (error) {
+                console.error(`Lỗi xóa bản ghi MSSV ${group.mssv}:`, error.message);
+              }
             }
           }
         }
@@ -131,7 +145,7 @@ export function ManageStudents({
     }
   };
 
-  // 🌟 HÀM XUẤT FILE EXCEL ĐẸP MẮT (Đã bổ sung cột Điểm Nề Nếp)
+  // Hàm xuất file Excel đẹp mắt kèm Điểm Nề Nếp
   const exportToExcel = (data: any[], fileName: string) => {
     if (!data || data.length === 0) return;
 
@@ -146,7 +160,7 @@ export function ManageStudents({
       'Giới Tính': item.GioiTinh || '',
       'Lớp': item.Lop || '',
       'Phòng': item.Phong || '',
-      'Điểm Nề Nếp': item.DiemNeNep ?? '', // 🌟 Thêm cột Điểm Nề Nếp ở đây
+      'Điểm Nề Nếp': item.DiemNeNep ?? '',
       'Vắng': item.Vang || '',
       'Đi Trễ': item.DiTre || '',
       'Mượn Đồ': item.MuonDo || '',
@@ -168,7 +182,7 @@ export function ManageStudents({
       { wch: 10 }, // Giới Tính
       { wch: 15 }, // Lớp
       { wch: 12 }, // Phòng
-      { wch: 15 }, // Điểm Nề Nếp 🌟
+      { wch: 15 }, // Điểm Nề Nếp
       { wch: 8 },  // Vắng
       { wch: 8 },  // Đi Trễ
       { wch: 10 }, // Mượn Đồ
@@ -201,14 +215,12 @@ export function ManageStudents({
     try {
       setIsDeleting(true);
       
-      // 1. Lấy danh sách sinh viên hiện tại
       const { data: currentDbStudents, error: fetchError } = await supabase
         .from('DanhSachSinhVien')
         .select('*');
 
       if (fetchError) throw fetchError;
 
-      // 🌟 2. Lấy dữ liệu điểm nề nếp từ bảng ChamDiem (dựa vào cột MSV giống MSSV)
       const { data: chamDiemData, error: chamDiemError } = await supabase
         .from('ChamDiem')
         .select('MSV, DiemNeNep');
@@ -217,7 +229,6 @@ export function ManageStudents({
         console.error('Không thể lấy dữ liệu bảng ChamDiem:', chamDiemError.message);
       }
 
-      // Tạo một Map để tra cứu điểm nề nếp nhanh hơn theo MSSV/MSV
       const diemMap = new Map<string, any>();
       if (chamDiemData) {
         chamDiemData.forEach((row) => {
@@ -242,7 +253,7 @@ export function ManageStudents({
             GioiTinh: s.GioiTinh || s.gender || 'Nam',
             Lop: s.Lop || s.className || '',
             Phong: s.Phong || s.TenPhong || s.room || null,
-            DiemNeNep: diemMap.has(mssvVal) ? diemMap.get(mssvVal) : (s.DiemNeNep ?? null), // 🌟 Gán điểm nề nếp
+            DiemNeNep: diemMap.has(mssvVal) ? diemMap.get(mssvVal) : (s.DiemNeNep ?? null),
             Vang: s.Vang ? String(s.Vang) : null,
             DiTre: s.DiTre ? String(s.DiTre) : null,
             MuonDo: s.MuonDo ? String(s.MuonDo) : null,
@@ -250,11 +261,9 @@ export function ManageStudents({
           };
         });
 
-        // 🌟 TỰ ĐỘNG XUẤT FILE EXCEL CÓ CỘT ĐIỂM NỀ NẾP CHO NGƯỜI DÙNG NGAY KHI KẾT THÚC
         const excelFileName = `TongHop_${dot.trim()}_${hocKy.trim()}_${namHoc.trim().replace(/\s+/g, '_')}`;
         exportToExcel(historyPayload, excelFileName);
 
-        // Lưu vào bảng lịch sử trên Supabase (Đảm bảo bảng KhoaHocDaKetThuc đã có cột DiemNeNep)
         const { error: insertError } = await supabase
           .from('KhoaHocDaKetThuc')
           .insert(historyPayload);
@@ -262,7 +271,6 @@ export function ManageStudents({
         if (insertError) throw insertError;
       }
 
-      // Xóa dữ liệu hiện tại trên Database
       const { error: deleteError } = await supabase
         .from('DanhSachSinhVien')
         .delete()
@@ -292,7 +300,6 @@ export function ManageStudents({
 
   return (
     <div className="manage-students-container">
-      {/* Phần giao diện giữ nguyên như cũ */}
       <div className="manage-header">
         <div>
           <h1 className="manage-title">Quản Lý Điểm Danh & Vi Phạm</h1>
@@ -334,7 +341,6 @@ export function ManageStudents({
         </div>
       </div>
 
-      {/* THANH TÌM KIẾM & LỌC */}
       <div className="filter-bar">
         <input
           type="text"
@@ -367,7 +373,6 @@ export function ManageStudents({
         </select>
       </div>
 
-      {/* BẢNG DANH SÁCH SINH VIÊN */}
       <div className="table-card">
         <table className="student-table">
           <thead>
@@ -443,7 +448,6 @@ export function ManageStudents({
         </table>
       </div>
 
-      {/* POPUP MODAL XỬ LÝ TRÙNG MSSV */}
       {showDuplicateModal && (
         <div className="modal-overlay">
           <div className="modal-card" style={{ maxWidth: '650px', width: '90%' }}>
@@ -490,7 +494,7 @@ export function ManageStudents({
                                 style={{ cursor: 'pointer', width: '16px', height: '16px' }}
                               />
                               <span>
-                                <b>{it.name}</b> — Lớp: {it.className || 'Trống'}
+                                <b>{it.name}</b> — Lớp: {it.className || 'Trống'} {it.id ? `(ID: ${it.id})` : ''}
                               </span>
                             </div>
                             <span style={{ fontWeight: 600, color: isMarkedForDelete ? '#dc2626' : '#16a34a' }}>
@@ -530,7 +534,6 @@ export function ManageStudents({
         </div>
       )}
 
-      {/* MODAL KẾT THÚC KHÓA HỌC */}
       {isModalOpen && canManage && (
         <div className="modal-overlay">
           <div className="modal-card">
@@ -598,7 +601,6 @@ export function ManageStudents({
         </div>
       )}
 
-      {/* MODAL THÔNG BÁO THÀNH CÔNG */}
       {showSuccessModal && (
         <div className="modal-overlay">
           <div className="modal-card" style={{ textAlign: 'center' }}>

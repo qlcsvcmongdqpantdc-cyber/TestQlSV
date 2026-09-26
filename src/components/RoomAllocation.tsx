@@ -87,8 +87,28 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'DanhSachSinhVien' },
-        () => {
-          // Khi có thay đổi từ thiết bị khác, dữ liệu sẽ tự động đồng bộ
+        async () => {
+          if (setStudents) {
+            const { data, error } = await supabase.from('DanhSachSinhVien').select('*');
+            if (!error && data) {
+              setStudents(data as unknown as Student[]);
+            }
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'RoomConfig' },
+        async () => {
+          const { data, error } = await supabase.from('RoomConfig').select('*').single();
+          if (!error && data) {
+            setIsRoomLocked(data.isLocked);
+            localStorage.setItem('KTX_IS_ROOM_LOCKED', String(data.isLocked));
+            if (!data.isLocked) {
+              setLockedRoomsData(null);
+              localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
+            }
+          }
         }
       )
       .subscribe();
@@ -96,7 +116,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [setStudents]);
 
   useEffect(() => {
     let isMounted = true;
