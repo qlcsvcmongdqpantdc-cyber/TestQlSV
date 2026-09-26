@@ -63,25 +63,33 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     }, 3500);
   };
 
-  const [isRoomLocked, setIsRoomLocked] = useState<boolean>(() => {
-    const savedLock = localStorage.getItem('KTX_IS_ROOM_LOCKED');
-    return savedLock === 'true';
-  });
+  // ĐÃ LOẠI BỎ localStorage - Trạng thái khóa phòng lấy trực tiếp từ DB
+  const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
+  const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(null);
 
-  const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(() => {
-    const savedData = localStorage.getItem('KTX_LOCKED_ROOMS_DATA');
-    if (savedData) {
-      try {
-        return JSON.parse(savedData);
-      } catch (e) {
-        return null;
-      }
-    }
-    return null;
-  });
-
-  // Lắng nghe thay đổi dữ liệu thời gian thực từ Supabase để đồng bộ giữa các thiết bị
+  // Lắng nghe thay đổi dữ liệu thời gian thực từ Supabase để đồng bộ giữa các thiết bị và tab ẩn danh
   useEffect(() => {
+    let isMounted = true;
+
+    const fetchRoomConfigFromDB = async () => {
+      const { data, error } = await supabase
+        .from('RoomConfig')
+        .select('*')
+        .eq('id', 1)
+        .single();
+
+      if (!error && data && isMounted) {
+        setIsRoomLocked(!!data.isLocked);
+        if (data.isLocked && data.locked_data) {
+          setLockedRoomsData(data.locked_data);
+        } else {
+          setLockedRoomsData(null);
+        }
+      }
+    };
+
+    fetchRoomConfigFromDB();
+
     const channel = supabase
       .channel('schema-db-changes')
       .on(
@@ -100,13 +108,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         'postgres_changes',
         { event: '*', schema: 'public', table: 'RoomConfig' },
         async () => {
-          const { data, error } = await supabase.from('RoomConfig').select('*').single();
-          if (!error && data) {
-            setIsRoomLocked(data.isLocked);
-            localStorage.setItem('KTX_IS_ROOM_LOCKED', String(data.isLocked));
-            if (!data.isLocked) {
+          const { data, error } = await supabase.from('RoomConfig').select('*').eq('id', 1).single();
+          if (!error && data && isMounted) {
+            setIsRoomLocked(!!data.isLocked);
+            if (data.isLocked && data.locked_data) {
+              setLockedRoomsData(data.locked_data);
+            } else {
               setLockedRoomsData(null);
-              localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
             }
           }
         }
@@ -114,6 +122,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       .subscribe();
 
     return () => {
+      isMounted = false;
       supabase.removeChannel(channel);
     };
   }, [setStudents]);
@@ -245,54 +254,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return calculateRoomAllocation();
   }, [calculateRoomAllocation]);
 
-  useEffect(() => {
-    let isMounted = true;
-    const checkRoomLockStatus = async () => {
-      try {
-        const { data, error } = await supabase
-          .from('RoomConfig')
-          .select('*')
-          .limit(1)
-          .single();
-
-        if (error && error.code !== 'PGRST116') {
-          console.error('Lỗi tải trạng thái khóa từ RoomConfig:', error.message);
-          return;
-        }
-
-        if (data && isMounted) {
-          if (data.isLocked === true) {
-            setIsRoomLocked(true);
-            localStorage.setItem('KTX_IS_ROOM_LOCKED', 'true');
-
-            setLockedRoomsData(prev => {
-              if (!prev) {
-                const newLockedState = calculateRoomAllocation();
-                localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(newLockedState));
-                return newLockedState;
-              }
-              return prev;
-            });
-          } else {
-            setIsRoomLocked(false);
-            localStorage.setItem('KTX_IS_ROOM_LOCKED', 'false');
-            localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
-            setLockedRoomsData(null);
-          }
-        }
-      } catch (err) {
-        console.error('Lỗi kết nối RoomConfig:', err);
-      }
-    };
-
-    if (students.length > 0) {
-      checkRoomLockStatus();
-    }
-    return () => {
-      isMounted = false;
-    };
-  }, [students.length, calculateRoomAllocation]);
-
   const getRoomsToDisplay = useMemo(() => {
     if (!isRoomLocked || !lockedRoomsData) {
       return calculatedRooms;
@@ -403,7 +364,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           return room;
         });
         setLockedRoomsData(updatedLockedRooms);
-        localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(updatedLockedRooms));
+        
+        // Đồng bộ dữ liệu phòng khóa lên Database
+        await supabase.from('RoomConfig').upsert({
+          id: 1,
+          isLocked: true,
+          locked_data: updatedLockedRooms
+        });
       }
 
       showToast(`Đã thêm sinh viên ${newStudentForm.HoVaTen} vào Phòng ${targetRoomForAdd} thành công!`, 'success');
@@ -472,7 +439,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         })
       }));
       setLockedRoomsData(updatedLockedRooms);
-      localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(updatedLockedRooms));
+
+      // Đồng bộ dữ liệu phòng khóa lên Database
+      await supabase.from('RoomConfig').upsert({
+        id: 1,
+        isLocked: true,
+        locked_data: updatedLockedRooms
+      });
     }
 
     setIsDeleting(false);
@@ -488,27 +461,33 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       setLockedRoomsData(lockedState);
       setIsRoomLocked(true);
 
-      localStorage.setItem('KTX_IS_ROOM_LOCKED', 'true');
-      localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(lockedState));
-
       try {
-        await supabase.from('RoomConfig').upsert({ id: 1, isLocked: true });
+        const { error } = await supabase.from('RoomConfig').upsert({ 
+          id: 1, 
+          isLocked: true,
+          locked_data: lockedState 
+        });
+        if (error) throw error;
         showToast('Đã khóa cố định sơ đồ phòng thành công.', 'success');
-      } catch (err) {
-        console.error('Lỗi kết nối:', err);
+      } catch (err: any) {
+        console.error('Lỗi kết nối khi khóa phòng:', err);
+        showToast('Lỗi khi khóa phòng: ' + err.message, 'error');
       }
     } else {
       setLockedRoomsData(null);
       setIsRoomLocked(false);
 
-      localStorage.setItem('KTX_IS_ROOM_LOCKED', 'false');
-      localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
-
       try {
-        await supabase.from('RoomConfig').upsert({ id: 1, isLocked: false });
+        const { error } = await supabase.from('RoomConfig').upsert({ 
+          id: 1, 
+          isLocked: false,
+          locked_data: null 
+        });
+        if (error) throw error;
         showToast('Đã mở khóa sơ đồ phòng.', 'success');
-      } catch (err) {
-        console.error('Lỗi kết nối:', err);
+      } catch (err: any) {
+        console.error('Lỗi kết nối khi mở khóa phòng:', err);
+        showToast('Lỗi khi mở khóa phòng: ' + err.message, 'error');
       }
     }
   };
@@ -637,13 +616,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             Sơ Đồ Phòng KTX QPAN ({filteredRooms.length}/{rooms.length} Phòng)
             {isRoomLocked && (
               <span style={{ fontSize: '12px', background: '#fee2e2', color: '#dc2626', padding: '2px 8px', borderRadius: '4px', border: '1px solid #f87171' }}>
-                🔒 Đã khóa sơ đồ (Giữ nguyên vị trí phòng)
+                🔒 Đã khóa sơ đồ (Đồng bộ Realtime từ Database)
               </span>
             )}
           </h2>
           <p>
             {isRoomLocked
-              ? 'Phòng đã được khóa cố định. Bấm nút dấu cộng (+) trên mỗi phòng dưới 12 người để thêm sinh viên mới.'
+              ? 'Phòng đã được khóa cố định trên hệ thống chung. Bấm nút dấu cộng (+) trên mỗi phòng để thêm sinh viên mới.'
               : 'Đang ở chế độ tự động phân phòng.'}
           </p>
         </div>
