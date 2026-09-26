@@ -42,12 +42,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [isSavingRooms, setIsSavingRooms] = useState<boolean>(false);
 
-  // Trạng thái modal thêm sinh viên theo phòng cụ thể
+  // Trạng thái modal thêm sinh viên theo phòng cụ thể (bao gồm trường Lop)
   const [isAddStudentOpen, setIsAddStudentOpen] = useState<boolean>(false);
   const [targetRoomForAdd, setTargetRoomForAdd] = useState<number | null>(null);
   const [newStudentForm, setNewStudentForm] = useState({
     HoVaTen: '',
     MSSV: '',
+    Lop: '',
     GioiTinh: 'Nam' as 'Nam' | 'Nữ',
     ThayCo: ''
   });
@@ -370,6 +371,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       const studentDataToInsert = {
         MSSV: newStudentForm.MSSV.trim(),
         HoVaTen: newStudentForm.HoVaTen.trim(),
+        Lop: newStudentForm.Lop.trim(),
         GioiTinh: newStudentForm.GioiTinh,
         ThayCo: newStudentForm.ThayCo || selectedTeacherFilter || teacherList[0] || '',
         Phong: targetRoomForAdd,
@@ -413,6 +415,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       setNewStudentForm({
         HoVaTen: '',
         MSSV: '',
+        Lop: '',
         GioiTinh: 'Nam',
         ThayCo: teacherList[0] || ''
       });
@@ -983,6 +986,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                       const displayCode = st.MSSV || st.studentId || st.id;
                       const isLeader = currentLeaderKey === studentKey;
                       const studentName = st.HoVaTen || st.name;
+                      const studentClass = st.Lop || st.lop;
                       const studentTeacher = st.ThayCo || st.thayCo || st.HoTen || st.hoTen;
                       const isTeacherMatch = selectedTeacherFilter ? studentTeacher === selectedTeacherFilter : true;
 
@@ -1024,7 +1028,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                                   style={{ marginRight: 4, verticalAlign: 'middle' }}
                                 />
                               )}
-                              {idx + 1}. {studentName} ({displayCode})
+                              {idx + 1}. {studentName} ({displayCode}){studentClass ? ` - Lớp: ${studentClass}` : ''}
                             </span>
                             {studentTeacher && <span style={{ fontSize: '10px', color: '#64748b' }}>GV: {studentTeacher}</span>}
                           </div>
@@ -1123,6 +1127,17 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                   placeholder="Ví dụ: 25000123"
                   value={newStudentForm.MSSV}
                   onChange={(e) => setNewStudentForm({ ...newStudentForm, MSSV: e.target.value })}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '14px', outline: 'none' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>Lớp</label>
+                <input
+                  type="text"
+                  placeholder="Ví dụ: CĐTT25A"
+                  value={newStudentForm.Lop}
+                  onChange={(e) => setNewStudentForm({ ...newStudentForm, Lop: e.target.value })}
                   style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '14px', outline: 'none' }}
                 />
               </div>
