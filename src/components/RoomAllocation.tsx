@@ -81,88 +81,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return null;
   });
 
-  // Lắng nghe thay đổi dữ liệu thời gian thực từ Supabase để đồng bộ giữa các thiết bị
-  useEffect(() => {
-    const channel = supabase
-      .channel('schema-db-changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'DanhSachSinhVien' },
-        async () => {
-          if (setStudents) {
-            const { data, error } = await supabase.from('DanhSachSinhVien').select('*');
-            if (!error && data) {
-              setStudents(data as unknown as Student[]);
-            }
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'RoomConfig' },
-        async () => {
-          const { data, error } = await supabase.from('RoomConfig').select('*').single();
-          if (!error && data) {
-            setIsRoomLocked(data.isLocked);
-            localStorage.setItem('KTX_IS_ROOM_LOCKED', String(data.isLocked));
-            if (!data.isLocked) {
-              setLockedRoomsData(null);
-              localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
-            }
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [setStudents]);
-
-  useEffect(() => {
-    let isMounted = true;
-    const fetchTeachersFromDatabase = async () => {
-      try {
-        const { data, error } = await supabase
-          .from('User')
-          .select('HoTen');
-
-        if (error) {
-          console.error('Lỗi khi tải danh sách HoTen từ bảng User:', error.message);
-          return;
-        }
-
-        if (data && isMounted) {
-          const uniqueNames = Array.from(
-            new Set(
-              data
-                .map((item: any) => item.HoTen)
-                .filter((name: string) => name && name.trim() !== '')
-            )
-          ).sort() as string[];
-
-          setTeacherList(uniqueNames);
-          if (uniqueNames.length > 0) {
-            setNewStudentForm(prev => ({ ...prev, ThayCo: uniqueNames[0] }));
-          }
-        }
-      } catch (err) {
-        console.error('Lỗi kết nối lấy HoTen:', err);
-      }
-    };
-
-    fetchTeachersFromDatabase();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const canManage = useMemo(() => {
-    return currentUser
-      ? (currentUser.role === 'admin' || currentUser.can_manage === true)
-      : true;
-  }, [currentUser]);
-
   const calculateRoomAllocation = useCallback((): Room[] => {
     const allValidStudents = students.filter((s: any) => {
       if (s.isAbsent || s.Vang === 'x') return false;
@@ -245,6 +163,101 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const calculatedRooms = useMemo(() => {
     return calculateRoomAllocation();
   }, [calculateRoomAllocation]);
+
+  // Lắng nghe thay đổi dữ liệu thời gian thực từ Supabase để đồng bộ giữa các thiết bị
+  useEffect(() => {
+    const channel = supabase
+      .channel('schema-db-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'DanhSachSinhVien' },
+        async () => {
+          if (setStudents) {
+            const { data, error } = await supabase.from('DanhSachSinhVien').select('*');
+            if (!error && data) {
+              const freshStudents = data as unknown as Student[];
+              setStudents(freshStudents);
+
+              // Nếu phòng đang khóa, tự động cập nhật lại lockedRoomsData từ dữ liệu mới trên DB để đồng bộ các máy khác
+              if (isRoomLocked) {
+                setLockedRoomsData(prevLocked => {
+                  if (!prevLocked) return null;
+                  
+                  // Cập nhật lại danh sách sinh viên theo phòng dựa trên thuộc tính 'Phong' hoặc tính lại từ đầu
+                  const updatedRooms = calculateRoomAllocation();
+                  localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(updatedRooms));
+                  return updatedRooms;
+                });
+              }
+            }
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'RoomConfig' },
+        async () => {
+          const { data, error } = await supabase.from('RoomConfig').select('*').single();
+          if (!error && data) {
+            setIsRoomLocked(data.isLocked);
+            localStorage.setItem('KTX_IS_ROOM_LOCKED', String(data.isLocked));
+            if (!data.isLocked) {
+              setLockedRoomsData(null);
+              localStorage.removeItem('KTX_LOCKED_ROOMS_DATA');
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [setStudents, isRoomLocked, calculateRoomAllocation]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchTeachersFromDatabase = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('User')
+          .select('HoTen');
+
+        if (error) {
+          console.error('Lỗi khi tải danh sách HoTen từ bảng User:', error.message);
+          return;
+        }
+
+        if (data && isMounted) {
+          const uniqueNames = Array.from(
+            new Set(
+              data
+                .map((item: any) => item.HoTen)
+                .filter((name: string) => name && name.trim() !== '')
+            )
+          ).sort() as string[];
+
+          setTeacherList(uniqueNames);
+          if (uniqueNames.length > 0) {
+            setNewStudentForm(prev => ({ ...prev, ThayCo: uniqueNames[0] }));
+          }
+        }
+      } catch (err) {
+        console.error('Lỗi kết nối lấy HoTen:', err);
+      }
+    };
+
+    fetchTeachersFromDatabase();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const canManage = useMemo(() => {
+    return currentUser
+      ? (currentUser.role === 'admin' || currentUser.can_manage === true)
+      : true;
+  }, [currentUser]);
 
   useEffect(() => {
     let isMounted = true;
@@ -390,22 +403,30 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       }
 
       if (setStudents) {
-        setStudents((prev) => [...prev, studentDataToInsert as unknown as Student]);
-      }
-
-      if (isRoomLocked && lockedRoomsData) {
-        const updatedLockedRooms = lockedRoomsData.map(room => {
-          if (room.roomNumber === targetRoomForAdd) {
-            return {
-              ...room,
-              genderType: room.genderType === 'Trống' ? newStudentForm.GioiTinh : room.genderType,
-              students: [...room.students, studentDataToInsert as unknown as Student]
-            };
+        setStudents((prev) => {
+          const updated = [...prev, studentDataToInsert as unknown as Student];
+          
+          // Nếu đang khóa phòng, cập nhật trực tiếp vào lockedRoomsData để hiển thị ngay lập tức
+          if (isRoomLocked) {
+            const updatedLockedRooms = (lockedRoomsData || calculatedRooms).map(room => {
+              if (room.roomNumber === targetRoomForAdd) {
+                const exists = room.students.some(s => String(s.MSSV) === String(studentDataToInsert.MSSV));
+                if (!exists) {
+                  return {
+                    ...room,
+                    genderType: room.genderType === 'Trống' ? newStudentForm.GioiTinh : room.genderType,
+                    students: [...room.students, studentDataToInsert as unknown as Student]
+                  };
+                }
+              }
+              return room;
+            });
+            setLockedRoomsData(updatedLockedRooms);
+            localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(updatedLockedRooms));
           }
-          return room;
+
+          return updated;
         });
-        setLockedRoomsData(updatedLockedRooms);
-        localStorage.setItem('KTX_LOCKED_ROOMS_DATA', JSON.stringify(updatedLockedRooms));
       }
 
       showToast(`Đã thêm sinh viên ${newStudentForm.HoVaTen} vào Phòng ${targetRoomForAdd} thành công!`, 'success');
