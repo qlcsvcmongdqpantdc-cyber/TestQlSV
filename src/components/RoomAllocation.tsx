@@ -64,7 +64,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
   const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(null);
 
-  // Hàm tính toán phân phòng: Gom Nữ trước, Nam sau; trong mỗi giới tính gom theo từng giáo viên (hết GV này đến GV khác, sắp xếp tên A-Z)
+  // Hàm tính toán phân phòng mặc định (chỉ dùng khi chưa khóa phòng)
   const calculateRoomAllocation = useCallback((): Room[] => {
     const safeStudents = Array.isArray(students) ? students : [];
     const allValidStudents = safeStudents.filter((s: any) => {
@@ -86,7 +86,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       });
     };
 
-    // 1. Tách riêng Nữ và Nam từ toàn bộ danh sách hợp lệ
     const allFemales = allValidStudents.filter((s: any) => {
       const g = normalizeGender(s?.GioiTinh || s?.gender);
       return g === 'nữ' || g === 'nu';
@@ -97,7 +96,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       return g === 'nam';
     });
 
-    // Hàm nhóm và sắp xếp học sinh theo từng giáo viên, sau đó sắp xếp A-Z tên học sinh mỗi GV
     const groupAndSortByTeacher = (group: Student[]) => {
       const teacherMap: Record<string, Student[]> = {};
       
@@ -109,12 +107,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         teacherMap[teacher].push(s);
       });
 
-      // Sắp xếp tên các giáo viên theo bảng chữ cái A-Z
       const sortedTeachers = Object.keys(teacherMap).sort((a, b) => a.localeCompare(b, 'vi', { sensitivity: 'accent' }));
       
       let orderedList: Student[] = [];
       sortedTeachers.forEach(teacher => {
-        // Sắp xếp sinh viên của từng giáo viên theo tên A-Z
         const sortedStudentsOfTeacher = sortByName(teacherMap[teacher]);
         orderedList = orderedList.concat(sortedStudentsOfTeacher);
       });
@@ -122,7 +118,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       return orderedList;
     };
 
-    // Gom học sinh theo cấu trúc: Giáo viên này xong rồi mới tới giáo viên khác (đã sắp xếp A-Z)
     const processedFemales = groupAndSortByTeacher(allFemales);
     const processedMales = groupAndSortByTeacher(allMales);
 
@@ -144,13 +139,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       }
     };
 
-    // 2. Gom toàn bộ Nữ (theo từng giáo viên) vào các phòng đầu tiên
     fillToRooms(processedFemales, 'Nữ');
-
-    // 3. Gom Nam (theo từng giáo viên) vào các phòng tiếp theo
     fillToRooms(processedMales, 'Nam');
 
-    // Đảm bảo số phòng tối thiểu không ít hơn INITIAL_ROOMS (20 phòng)
     if (rooms.length < INITIAL_ROOMS) {
       const needed = INITIAL_ROOMS - rooms.length;
       for (let i = 0; i < needed; i++) {
@@ -321,16 +312,17 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const rooms = getRoomsToDisplay;
 
-  // Xử lý khi người dùng bấm nút "Xác Nhận Phòng"
+  // Xử lý khi người dùng bấm nút "Xác Nhận Phòng": 
+  // Lưu chính xác trạng thái phòng hiện tại lên CSDL thay vì tính toán lại từ đầu (tránh bị đôn vị trí).
   const handleConfirmAndSaveRooms = async () => {
     if (!canManage) return;
     setIsSavingRooms(true);
 
     try {
-      const newlyCalculatedRooms = calculateRoomAllocation();
+      const currentRoomsToSave = rooms; 
       const updates: { mssv: any; roomNumber: number }[] = [];
 
-      newlyCalculatedRooms.forEach((room) => {
+      currentRoomsToSave.forEach((room) => {
         (room.students || []).forEach((st: any) => {
           const mssvValue = st?.MSSV || st?.studentId || st?.id;
           if (mssvValue) {
@@ -353,20 +345,20 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         }
       }
 
-      setLockedRoomsData(newlyCalculatedRooms);
+      setLockedRoomsData(currentRoomsToSave);
       setIsRoomLocked(true);
 
       const { error: configError } = await supabase.from('RoomConfig').upsert({
         id: 1,
         isLocked: true,
-        locked_data: newlyCalculatedRooms
+        locked_data: currentRoomsToSave
       });
 
       if (configError) {
         throw new Error(configError.message);
       }
 
-      showToast('Đã xác nhận, phân phòng mới và lưu cố định thành công!', 'success');
+      showToast('Đã lưu cố định sơ đồ phòng hiện tại thành công!', 'success');
     } catch (err: any) {
       console.error('Lỗi khi lưu phòng:', err);
       showToast('Lỗi khi lưu phòng: ' + (err?.message || err), 'error');
@@ -480,7 +472,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
       const { error } = await supabase
         .from('DanhSachSinhVien')
-        .update({ Vang: 'x' })
+        .update({ Vang: 'x', Phong: null })
         .eq('MSSV', mssvValue);
 
       if (error) {
@@ -489,23 +481,24 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         return;
       }
 
-      if (isRoomLocked && lockedRoomsData) {
-        const updatedLockedRooms = lockedRoomsData.map(room => ({
-          ...room,
-          students: (room.students || []).filter((st: any) => {
-            if (!st) return false;
-            const sKey = String(st.MSSV || st.studentId || st.id);
-            return sKey !== studentKey;
-          })
-        }));
-        setLockedRoomsData(updatedLockedRooms);
+      let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
+      
+      updatedLockedRooms = updatedLockedRooms.map(room => ({
+        ...room,
+        students: (room.students || []).filter((st: any) => {
+          if (!st) return false;
+          const sKey = String(st.MSSV || st.studentId || st.id);
+          return sKey !== studentKey;
+        })
+      }));
 
-        await supabase.from('RoomConfig').upsert({
-          id: 1,
-          isLocked: true,
-          locked_data: updatedLockedRooms
-        });
-      }
+      setLockedRoomsData(updatedLockedRooms);
+
+      await supabase.from('RoomConfig').upsert({
+        id: 1,
+        isLocked: true,
+        locked_data: updatedLockedRooms
+      });
 
       if (setStudents) {
         setStudents((prevStudents) =>
@@ -513,14 +506,14 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             if (!s) return s;
             const sKey = String(s.MSSV || (s as any).studentId || s.id);
             if (sKey === studentKey) {
-              return { ...s, isAbsent: true, Vang: 'x' };
+              return { ...s, isAbsent: true, Vang: 'x', Phong: null };
             }
             return s;
           })
         );
       }
 
-      showToast(`Đã đánh dấu vắng cho sinh viên và cập nhật sĩ số phòng.`, 'success');
+      showToast(`Đã đánh dấu vắng và xóa sinh viên khỏi phòng thành công.`, 'success');
     } catch (err) {
       showToast('Lỗi kết nối mạng.', 'error');
     } finally {
@@ -703,8 +696,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           </h2>
           <p>
             {isRoomLocked
-              ? 'Phòng đã được khóa cố định. Bấm "Xác Nhận Phòng" để tính toán phân phòng mới và lưu lại.'
-              : 'Đang hiển thị chế độ xem trước. Bấm "Xác Nhận Phòng" để chạy thuật toán phân phòng và lưu vào hệ thống.'}
+              ? 'Phòng đã được khóa cố định. Bấm "Xác Nhận Phòng" để lưu lại cấu hình hiện tại.'
+              : 'Đang hiển thị chế độ xem trước. Bấm "Xác Nhận Phòng" để lưu sơ đồ vào hệ thống.'}
           </p>
         </div>
 
@@ -730,7 +723,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                 }}
               >
                 <CheckCircle size={16} />
-                {isSavingRooms ? 'Đang chạy và lưu...' : 'Xác Nhận Phòng'}
+                {isSavingRooms ? 'Đang lưu...' : 'Xác Nhận Phòng'}
               </button>
 
               <button
@@ -1280,7 +1273,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             </div>
 
             <p style={{ fontSize: '14px', color: '#334155', marginBottom: '20px', lineHeight: '1.5' }}>
-              Bạn có chắc chắn muốn đánh dấu sinh viên <strong>{(studentToDelete as any).HoVaTen || studentToDelete.name}</strong> ({studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id}) là vắng mặt và giảm sĩ số phòng không?
+              Bạn có chắc chắn muốn đánh dấu sinh viên <strong>{(studentToDelete as any).HoVaTen || studentToDelete.name}</strong> ({studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id}) là vắng mặt và xóa khỏi phòng không?
             </p>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
