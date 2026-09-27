@@ -269,7 +269,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return calculateRoomAllocation();
   }, [calculateRoomAllocation]);
 
-  // Cố định phòng khi khóa: Chỉ ẩn sinh viên vắng khỏi phòng hiện tại, không dôn lệch sang phòng khác
   const getRoomsToDisplay = useMemo(() => {
     if (!isRoomLocked || !lockedRoomsData) {
       return calculatedRooms;
