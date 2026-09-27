@@ -269,7 +269,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return calculateRoomAllocation();
   }, [calculateRoomAllocation]);
 
-  // Đã khắc phục lỗi trùng lặp bằng cách dùng Map gom duy nhất theo MSSV
   const getRoomsToDisplay = useMemo(() => {
     let baseRooms = (!isRoomLocked || !lockedRoomsData) ? calculatedRooms : lockedRoomsData;
     const safeStudents = Array.isArray(students) ? students : [];
@@ -310,24 +309,47 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     setIsSavingRooms(true);
 
     try {
-      for (const room of rooms) {
-        for (const st of room.students) {
-          const mssvValue = st?.MSSV || (st as any)?.studentId || st?.id;
+      const updates: { mssv: any; roomNumber: number }[] = [];
+
+      rooms.forEach((room) => {
+        (room.students || []).forEach((st: any) => {
+          const mssvValue = st?.MSSV || st?.studentId || st?.id;
           if (mssvValue) {
-            await supabase
-              .from('DanhSachSinhVien')
-              .update({ Phong: room.roomNumber })
-              .eq('MSSV', mssvValue);
+            updates.push({
+              mssv: mssvValue,
+              roomNumber: room.roomNumber
+            });
           }
+        });
+      });
+
+      for (const item of updates) {
+        const { error } = await supabase
+          .from('DanhSachSinhVien')
+          .update({ Phong: item.roomNumber })
+          .eq('MSSV', item.mssv);
+
+        if (error) {
+          console.error(`Lỗi cập nhật phòng cho MSSV ${item.mssv}:`, error.message);
         }
       }
 
-      showToast('Đã xác nhận và lưu sơ đồ phòng lên hệ thống thành công!', 'success');
+      const currentRoomState = rooms;
+      setLockedRoomsData(currentRoomState);
+      setIsRoomLocked(true);
+
+      await supabase.from('RoomConfig').upsert({
+        id: 1,
+        isLocked: true,
+        locked_data: currentRoomState
+      });
+
+      showToast('Đã xác nhận và lưu cố định sơ đồ phòng lên hệ thống thành công!', 'success');
     } catch (err: any) {
       console.error('Lỗi khi lưu phòng:', err);
       showToast('Lỗi khi lưu phòng: ' + (err?.message || err), 'error');
     } finally {
-      setIsSavingRooms(false);
+    setIsSavingRooms(false);
     }
   };
 

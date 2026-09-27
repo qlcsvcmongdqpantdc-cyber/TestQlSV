@@ -7,7 +7,19 @@ import type { Student } from '../types/student';
 import type { User } from '../types/auth';
 import './RoomScoring.css';
 
-type ScoringStudent = Student & { room?: string; roomName?: string; gender?: string; isAbsent?: boolean; isLate?: boolean; thayCo?: string; ThayCo?: string; teacher?: string; Phong?: string };
+type ScoringStudent = Student & { 
+  studentId?: string; 
+  name?: string; 
+  room?: string; 
+  roomName?: string; 
+  gender?: string; 
+  isAbsent?: boolean; 
+  isLate?: boolean; 
+  thayCo?: string; 
+  ThayCo?: string; 
+  teacher?: string; 
+  Phong?: string 
+};
 
 const DEFAULT_VIOLATIONS = [
   { code: 'V', displayCode: 'V', label: '1. Điểm danh: Không phép (V)', penalty: 2 },
@@ -59,15 +71,23 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
 
   const canManage = currentUser?.role === 'admin' || currentUser?.can_manage === true;
 
+  // Chuẩn hóa dữ liệu sinh viên
   const processedStudents = useMemo<ScoringStudent[]>(() => {
     if (!students || students.length === 0) return [];
     const activeStudents = (students as ScoringStudent[]).filter((s) => !s.isAbsent);
 
-    return activeStudents.map((st: any) => ({
-      ...st,
-      room: (st.Phong ?? st.phong ?? st.roomName ?? st.room ?? st['Phòng'] ?? 'Chưa phân phòng').toString().trim(),
-      thayCo: (st.ThayCo ?? st.thayco ?? st.thayCo ?? st.teacher ?? st['Giảng viên'] ?? 'Chưa phân công').toString().trim(),
-    }));
+    return activeStudents.map((st: any) => {
+      const rawRoom = (st.Phong ?? st.phong ?? st.roomName ?? st.room ?? st['Phòng'] ?? 'Chưa phân phòng').toString().trim();
+      const formattedRoom = /^\d+$/.test(rawRoom) ? String(parseInt(rawRoom, 10)) : rawRoom;
+
+      return {
+        ...st,
+        studentId: (st.studentId ?? st.id ?? st.mssv ?? st.MSV ?? st['MSSV'] ?? '').toString().trim(),
+        name: (st.name ?? st.hoVaTen ?? st.HoVaTen ?? st['Họ và Tên'] ?? '').toString().trim(),
+        room: formattedRoom,
+        thayCo: (st.ThayCo ?? st.thayco ?? st.thayCo ?? st.teacher ?? st['Giảng viên'] ?? 'Chưa phân công').toString().trim(),
+      };
+    });
   }, [students]);
 
   useEffect(() => {
@@ -138,15 +158,22 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
   }, []);
 
   const filteredStudents = useMemo(() => {
-    return processedStudents.filter((s) => {
+    const list = processedStudents.filter((s) => {
       const roomMatch = selectedRoom === 'Tất cả' || s.room === selectedRoom;
       const teacherName = (s.thayCo || '').trim();
       const teacherMatch = selectedTeacher === 'Tất cả' || teacherName === selectedTeacher;
       
       const search = searchTerm.toLowerCase().trim();
-      const searchMatch = !search || s.name.toLowerCase().includes(search) || (s.studentId && s.studentId.toLowerCase().includes(search));
+      const searchMatch = !search || (s.name && s.name.toLowerCase().includes(search)) || (s.studentId && s.studentId.toLowerCase().includes(search));
       
       return roomMatch && teacherMatch && searchMatch;
+    });
+
+    return list.sort((a, b) => {
+      const rA = parseInt(a.room || '0', 10);
+      const rB = parseInt(b.room || '0', 10);
+      if (rA !== rB) return rA - rB;
+      return (a.name || '').localeCompare(b.name || '', 'vi', { sensitivity: 'base' });
     });
   }, [processedStudents, selectedRoom, selectedTeacher, searchTerm]);
 
@@ -168,7 +195,6 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     return Math.max(0, 10 - totalPenalty);
   };
 
-  // --- ĐÃ BỎ LOGIC TỰ ĐỘNG LƯU PHÒNG (LOẠI BỎ TRƯỜNG PHÒNG KHỎI PAYLOAD) ---
   const handleConfirmAndSaveAll = async () => {
     if (!canManage) {
       toast.error('Bạn không có quyền thực hiện thao tác này!');
@@ -181,7 +207,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     try {
       const payloads = processedStudents.map((st, idx) => {
         const msv = String(st.studentId || st.id || idx);
-        const hoVaTen = st.name;
+        const hoVaTen = st.name || '';
         const studentScores = scores[msv] || {};
         const noteValue = notes[msv] || '';
 
@@ -247,7 +273,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     setNotes((prev) => ({ ...prev, [studentKey]: newNote }));
   };
 
-  const handleSelectChange = (student: ScoringStudent, day: number, selectedValue: string, eventTarget: HTMLSelectElement) => {
+  const handleSelectChange = async (student: ScoringStudent, day: number, selectedValue: string, eventTarget: HTMLSelectElement) => {
     if (!canManage) {
       toast.error('Bạn không có quyền thực hiện thao tác này!');
       eventTarget.value = '';
@@ -280,12 +306,22 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
         penalty: penalty,
       };
 
-      supabase.from('ViolationRules').upsert({
-        Code: newRule.code,
-        DisplayCode: newRule.displayCode,
-        Label: newRule.label,
-        Penalty: newRule.penalty,
-      }, { onConflict: 'Code' }).then(() => {});
+      try {
+        const { error } = await supabase.from('ViolationRules').upsert({
+          Code: newRule.code,
+          DisplayCode: newRule.displayCode,
+          Label: newRule.label,
+          Penalty: newRule.penalty,
+        }, { onConflict: 'Code' });
+
+        if (error) {
+          toast.error('Không thể lưu quy định lỗi lên CSDL!');
+          eventTarget.value = '';
+          return;
+        }
+      } catch (err) {
+        console.error(err);
+      }
 
       if (!violations.some((v) => v.code === newRule.code)) {
         setViolations((prev) => [...prev, newRule]);
@@ -350,9 +386,21 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
   const roomList = useMemo(() => {
     const rooms = new Set<string>();
     processedStudents.forEach((s) => {
-      if (s.room) rooms.add(s.room);
+      if (s.room && s.room !== 'Chưa phân phòng') {
+        rooms.add(s.room);
+      }
     });
-    return ['Tất cả', ...Array.from(rooms).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))];
+
+    const sortedRooms = Array.from(rooms).sort((a, b) => {
+      const numA = parseInt(a, 10);
+      const numB = parseInt(b, 10);
+      if (!isNaN(numA) && !isNaN(numB)) {
+        return numA - numB;
+      }
+      return a.localeCompare(b, undefined, { sensitivity: 'base' });
+    });
+
+    return ['Tất cả', ...sortedRooms];
   }, [processedStudents]);
 
   const teacherList = useMemo(() => {
@@ -379,7 +427,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
 
       const row: Record<string, any> = {
         'STT': idx + 1,
-        'MSV': st.studentId || st.id || '',
+        'MSV': st.studentId || '',
         'Họ và Tên': st.name || '',
         'Phòng': st.room || '',
         'Giảng viên': st.thayCo || '',
@@ -409,7 +457,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
 
           const row: Record<string, any> = {
             'STT': idx + 1,
-            'MSV': st.studentId || st.id || '',
+            'MSV': st.studentId || '',
             'Họ và Tên': st.name || '',
             'Phòng': st.room || '',
             'Giảng viên': st.thayCo || '',
@@ -562,7 +610,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
                     return (
                       <tr key={`${studentKey}-${idx}`}>
                         <td>{idx + 1}</td>
-                        <td className="col-msv">{st.studentId || st.id}</td>
+                        <td className="col-msv">{st.studentId}</td>
                         <td className="col-name">{st.name}</td>
                         <td className="col-room">{st.room}</td>
                         <td className="col-room">{st.thayCo || ''}</td>

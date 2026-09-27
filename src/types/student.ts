@@ -17,7 +17,7 @@
     MSSV?:string;
     Nghi?: string | null; // <--- THÊM DÒNG NÀY VÀO ĐỂ LƯU TRẠNG THÁI NGHỈ  
     Vang?:string;
-    Phong?:number;
+    Phong?:number | null;
   }
 
   export type TabType = 'add' | 'manage' | 'rooms' | 'scoring' | 'history' | 'users' | 'borrow-list';
