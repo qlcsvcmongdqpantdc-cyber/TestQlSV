@@ -64,8 +64,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
   const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(null);
 
+  // Sửa lại useEffect quản lý Realtime và unmount an toàn tránh trắng trang
   useEffect(() => {
     let isMounted = true;
+    let channel: any = null;
 
     const fetchRoomConfigFromDB = async () => {
       try {
@@ -90,44 +92,50 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
     fetchRoomConfigFromDB();
 
-    const channel = supabase
-      .channel('schema-db-changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'DanhSachSinhVien' },
-        async () => {
-          if (setStudents && isMounted) {
-            const { data, error } = await supabase.from('DanhSachSinhVien').select('*');
-            if (!error && data && isMounted) {
-              setStudents(data as unknown as Student[]);
-            }
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'RoomConfig' },
-        async () => {
-          try {
-            const { data, error } = await supabase.from('RoomConfig').select('*').eq('id', 1).single();
-            if (!error && data && isMounted) {
-              setIsRoomLocked(!!data.isLocked);
-              if (data.isLocked && data.locked_data) {
-                setLockedRoomsData(data.locked_data);
-              } else {
-                setLockedRoomsData(null);
+    try {
+      channel = supabase
+        .channel('room-allocation-unique-channel-' + Date.now())
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'DanhSachSinhVien' },
+          async () => {
+            if (setStudents && isMounted) {
+              const { data, error } = await supabase.from('DanhSachSinhVien').select('*');
+              if (!error && data && isMounted) {
+                setStudents(data as unknown as Student[]);
               }
             }
-          } catch (err) {
-            console.error('Lỗi realtime RoomConfig:', err);
           }
-        }
-      )
-      .subscribe();
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'RoomConfig' },
+          async () => {
+            try {
+              const { data, error } = await supabase.from('RoomConfig').select('*').eq('id', 1).single();
+              if (!error && data && isMounted) {
+                setIsRoomLocked(!!data.isLocked);
+                if (data.isLocked && data.locked_data) {
+                  setLockedRoomsData(data.locked_data);
+                } else {
+                  setLockedRoomsData(null);
+                }
+              }
+            } catch (err) {
+              console.error('Lỗi realtime RoomConfig:', err);
+            }
+          }
+        )
+        .subscribe();
+    } catch (e) {
+      console.error('Lỗi khởi tạo channel:', e);
+    }
 
     return () => {
       isMounted = false;
-      supabase.removeChannel(channel);
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
     };
   }, [setStudents]);
 
