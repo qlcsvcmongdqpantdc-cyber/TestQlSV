@@ -42,14 +42,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [isSavingRooms, setIsSavingRooms] = useState<boolean>(false);
 
+  // Trạng thái modal chọn sinh viên vắng để đưa vào phòng
   const [isAddStudentOpen, setIsAddStudentOpen] = useState<boolean>(false);
   const [targetRoomForAdd, setTargetRoomForAdd] = useState<number | null>(null);
-  const [newStudentForm, setNewStudentForm] = useState({
-    HoVaTen: '',
-    MSSV: '',
-    GioiTinh: 'Nam' as 'Nam' | 'Nữ',
-    ThayCo: ''
-  });
+  const [targetRoomGender, setTargetRoomGender] = useState<'Nam' | 'Nữ' | 'Trống'>('Nam');
+  const [selectedAbsentStudentId, setSelectedAbsentStudentId] = useState<string>('');
   const [isSubmittingAdd, setIsSubmittingAdd] = useState<boolean>(false);
 
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
@@ -255,9 +252,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           ).sort() as string[];
 
           setTeacherList(uniqueNames);
-          if (uniqueNames.length > 0) {
-            setNewStudentForm(prev => ({ ...prev, ThayCo: uniqueNames[0] }));
-          }
         }
       } catch (err) {
         console.error('Lỗi kết nối lấy HoTen:', err);
@@ -275,6 +269,15 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       ? (currentUser.role === 'admin' || currentUser.can_manage === true)
       : true;
   }, [currentUser]);
+
+  // Lọc ra danh sách các sinh viên hiện đang vắng mặt (có thể chọn để đưa lại vào phòng)
+  const absentStudentsList = useMemo(() => {
+    const safeStudents = Array.isArray(students) ? students : [];
+    return safeStudents.filter((s: any) => {
+      if (!s) return false;
+      return s.isAbsent || s.Vang === 'x';
+    });
+  }, [students]);
 
   // Hiển thị phòng dựa theo trạng thái khóa hoặc tạm tính nếu chưa khóa
   const getRoomsToDisplay = useMemo(() => {
@@ -312,8 +315,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const rooms = getRoomsToDisplay;
 
-  // Xử lý khi người dùng bấm nút "Xác Nhận Phòng": 
-  // Lưu chính xác trạng thái phòng hiện tại lên CSDL thay vì tính toán lại từ đầu (tránh bị đôn vị trí).
   const handleConfirmAndSaveRooms = async () => {
     if (!canManage) return;
     setIsSavingRooms(true);
@@ -369,62 +370,91 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const openAddStudentModalForRoom = (roomNum: number, roomGender: 'Nữ' | 'Nam' | 'Trống') => {
     setTargetRoomForAdd(roomNum);
-    setNewStudentForm(prev => ({
-      ...prev,
-      GioiTinh: roomGender === 'Nữ' ? 'Nữ' : 'Nam'
-    }));
+    setTargetRoomGender(roomGender);
+    setSelectedAbsentStudentId('');
     setIsAddStudentOpen(true);
   };
 
-  const handleAddStudent = async (e: React.FormEvent) => {
+  // Logic chọn sinh viên vắng và đưa vào phòng (cập nhật Vang = null / false và Phong = roomNumber)
+  const handleAssignAbsentStudentToRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canManage || targetRoomForAdd === null) return;
+    if (!canManage || targetRoomForAdd === null || !selectedAbsentStudentId) return;
 
-    if (!newStudentForm.HoVaTen.trim() || !newStudentForm.MSSV.trim()) {
-      showToast('Vui lòng nhập đầy đủ Họ và tên và MSSV!', 'error');
+    const studentToRestore = absentStudentsList.find((s: any) => {
+      const sKey = String(s.MSSV || s.studentId || s.id);
+      return sKey === selectedAbsentStudentId;
+    });
+
+    if (!studentToRestore) {
+      showToast('Không tìm thấy sinh viên được chọn!', 'error');
       return;
+    }
+
+    // Kiểm tra giới tính nếu phòng đã có người
+    const studentGender = String((studentToRestore as any).GioiTinh || (studentToRestore as any).gender || '').trim().toLowerCase();
+    if (targetRoomGender !== 'Trống') {
+      const isFemaleRoom = targetRoomGender === 'Nữ';
+      const isStudentFemale = studentGender === 'nữ' || studentGender === 'nu';
+      if (isFemaleRoom !== isStudentFemale) {
+        showToast(`Không thể xếp sinh viên này vào phòng ${targetRoomGender} do lệch giới tính!`, 'error');
+        return;
+      }
     }
 
     setIsSubmittingAdd(true);
 
     try {
-      const studentDataToInsert = {
-        MSSV: newStudentForm.MSSV.trim(),
-        HoVaTen: newStudentForm.HoVaTen.trim(),
-        GioiTinh: newStudentForm.GioiTinh,
-        ThayCo: newStudentForm.ThayCo || selectedTeacherFilter || teacherList[0] || '',
-        Phong: targetRoomForAdd,
-        Vang: null
-      };
+      const mssvValue = (studentToRestore as any).MSSV || (studentToRestore as any).studentId || studentToRestore.id;
 
       const { error } = await supabase
         .from('DanhSachSinhVien')
-        .insert([studentDataToInsert]);
+        .update({ Vang: null, Phong: targetRoomForAdd })
+        .eq('MSSV', mssvValue);
 
       if (error) {
-        showToast('Lỗi khi thêm sinh viên: ' + error.message, 'error');
+        showToast('Lỗi khi cập nhật sinh viên: ' + error.message, 'error');
         setIsSubmittingAdd(false);
         return;
       }
 
+      const updatedStudentObj = {
+        ...studentToRestore,
+        Vang: null,
+        isAbsent: false,
+        Phong: targetRoomForAdd
+      };
+
       if (setStudents) {
-        setStudents((prev) => [...(Array.isArray(prev) ? prev : []), studentDataToInsert as unknown as Student]);
+        setStudents((prev) =>
+          (Array.isArray(prev) ? prev : []).map((s) => {
+            if (!s) return s;
+            const sKey = String(s.MSSV || (s as any).studentId || s.id);
+            if (sKey === selectedAbsentStudentId) {
+              return updatedStudentObj as unknown as Student;
+            }
+            return s;
+          })
+        );
       }
 
       let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
       const roomIndex = updatedLockedRooms.findIndex(r => r.roomNumber === targetRoomForAdd);
 
+      const resolvedGender = targetRoomGender === 'Trống' 
+        ? ((studentGender === 'nữ' || studentGender === 'nu') ? 'Nữ' : 'Nam')
+        : targetRoomGender;
+
       if (roomIndex >= 0) {
         updatedLockedRooms[roomIndex] = {
           ...updatedLockedRooms[roomIndex],
-          genderType: updatedLockedRooms[roomIndex].genderType === 'Trống' ? newStudentForm.GioiTinh : updatedLockedRooms[roomIndex].genderType,
-          students: [...(updatedLockedRooms[roomIndex].students || []), studentDataToInsert as unknown as Student]
+          genderType: updatedLockedRooms[roomIndex].genderType === 'Trống' ? resolvedGender : updatedLockedRooms[roomIndex].genderType,
+          students: [...(updatedLockedRooms[roomIndex].students || []), updatedStudentObj as unknown as Student]
         };
       } else {
         updatedLockedRooms.push({
           roomNumber: targetRoomForAdd,
-          students: [studentDataToInsert as unknown as Student],
-          genderType: newStudentForm.GioiTinh,
+          students: [updatedStudentObj as unknown as Student],
+          genderType: resolvedGender,
           hasPenalized: false
         });
       }
@@ -444,16 +474,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       setLockedRoomsData(updatedLockedRooms);
       setIsRoomLocked(true);
 
-      showToast(`Đã thêm sinh viên ${newStudentForm.HoVaTen} vào đúng Phòng ${targetRoomForAdd} thành công!`, 'success');
+      showToast(`Đã đưa sinh viên ${(studentToRestore as any).HoVaTen || (studentToRestore as any).name} vào Phòng ${targetRoomForAdd} thành công!`, 'success');
       
       setIsAddStudentOpen(false);
       setTargetRoomForAdd(null);
-      setNewStudentForm({
-        HoVaTen: '',
-        MSSV: '',
-        GioiTinh: 'Nam',
-        ThayCo: teacherList[0] || ''
-      });
+      setSelectedAbsentStudentId('');
     } catch (err: any) {
       showToast('Lỗi hệ thống khi thêm sinh viên.', 'error');
     } finally {
@@ -866,7 +891,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                       <button
                         type="button"
                         onClick={() => openAddStudentModalForRoom(room.roomNumber, room.genderType)}
-                        title={`Thêm sinh viên vào Phòng ${room.roomNumber}`}
+                        title={`Chọn sinh viên vắng để đưa vào Phòng ${room.roomNumber}`}
                         style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -1120,6 +1145,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         )}
       </div>
 
+      {/* Modal chọn sinh viên vắng để đưa vào phòng thay vì nhập tay */}
       {isAddStudentOpen && (
         <div style={{
           position: 'fixed',
@@ -1138,7 +1164,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             background: '#ffffff',
             borderRadius: '12px',
             padding: '24px',
-            maxWidth: '450px',
+            maxWidth: '480px',
             width: '100%',
             boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
             border: '1px solid #e2e8f0'
@@ -1146,7 +1172,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
               <h3 style={{ margin: 0, fontSize: '18px', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <UserPlus size={20} color="#2563eb" />
-                Thêm Sinh Viên vào Phòng {targetRoomForAdd}
+                Đưa Sinh Viên Vắng Trở Lại Phòng {targetRoomForAdd}
               </h3>
               <button 
                 type="button" 
@@ -1157,59 +1183,42 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleAddStudent} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <form onSubmit={handleAssignAbsentStudentToRoom} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>Họ và tên *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ví dụ: Nguyễn Văn A"
-                  value={newStudentForm.HoVaTen}
-                  onChange={(e) => setNewStudentForm({ ...newStudentForm, HoVaTen: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '14px', outline: 'none' }}
-                />
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>Mã số sinh viên (MSSV) *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ví dụ: 25000123"
-                  value={newStudentForm.MSSV}
-                  onChange={(e) => setNewStudentForm({ ...newStudentForm, MSSV: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '14px', outline: 'none' }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>Giới tính (GioiTinh)</label>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#475569', marginBottom: '6px' }}>
+                  Chọn sinh viên đang vắng mặt từ danh sách:
+                </label>
+                {absentStudentsList.length === 0 ? (
+                  <div style={{ padding: '12px', background: '#f8fafc', borderRadius: '6px', color: '#64748b', fontSize: '13px', textAlign: 'center', border: '1px solid #e2e8f0' }}>
+                    Hiện không có sinh viên nào đang ở trạng thái vắng mặt.
+                  </div>
+                ) : (
                   <select
-                    value={newStudentForm.GioiTinh}
-                    onChange={(e) => setNewStudentForm({ ...newStudentForm, GioiTinh: e.target.value as 'Nam' | 'Nữ' })}
-                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '14px', background: '#fff', outline: 'none' }}
+                    required
+                    value={selectedAbsentStudentId}
+                    onChange={(e) => setSelectedAbsentStudentId(e.target.value)}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '14px', background: '#fff', outline: 'none', cursor: 'pointer' }}
                   >
-                    <option value="Nam">Nam</option>
-                    <option value="Nữ">Nữ</option>
+                    <option value="">-- Chọn sinh viên vắng --</option>
+                    {absentStudentsList.map((st: any) => {
+                      const sKey = String(st.MSSV || st.studentId || st.id);
+                      const sName = st.HoVaTen || st.name;
+                      const sGender = st.GioiTinh || st.gender || '';
+                      return (
+                        <option key={sKey} value={sKey}>
+                          {sName} ({sKey}) - Giới tính: {sGender}
+                        </option>
+                      );
+                    })}
                   </select>
-                </div>
-
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>Giáo viên phụ trách</label>
-                  <select
-                    value={newStudentForm.ThayCo}
-                    onChange={(e) => setNewStudentForm({ ...newStudentForm, ThayCo: e.target.value })}
-                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '14px', background: '#fff', outline: 'none' }}
-                  >
-                    {teacherList.map((t) => (
-                      <option key={t} value={t}>{t}</option>
-                    ))}
-                  </select>
-                </div>
+                )}
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' }}>
+              <div style={{ fontSize: '12px', color: '#64748b', background: '#f8fafc', padding: '10px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                💡 Khi chọn và xác nhận, hệ thống sẽ tự động cập nhật trạng thái của sinh viên thành <strong>có mặt</strong> và xếp vào đúng Phòng {targetRoomForAdd}.
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
                 <button
                   type="button"
                   onClick={() => setIsAddStudentOpen(false)}
@@ -1220,10 +1229,19 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingAdd}
-                  style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #2563eb', background: '#2563eb', color: '#ffffff', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}
+                  disabled={isSubmittingAdd || absentStudentsList.length === 0 || !selectedAbsentStudentId}
+                  style={{ 
+                    padding: '8px 16px', 
+                    borderRadius: '6px', 
+                    border: '1px solid #2563eb', 
+                    background: (absentStudentsList.length === 0 || !selectedAbsentStudentId) ? '#93c5fd' : '#2563eb', 
+                    color: '#ffffff', 
+                    fontSize: '14px', 
+                    fontWeight: 600, 
+                    cursor: (absentStudentsList.length === 0 || !selectedAbsentStudentId) ? 'not-allowed' : 'pointer' 
+                  }}
                 >
-                  {isSubmittingAdd ? 'Đang thêm...' : 'Lưu sinh viên'}
+                  {isSubmittingAdd ? 'Đang xử lý...' : 'Xác nhận đưa vào phòng'}
                 </button>
               </div>
             </form>
