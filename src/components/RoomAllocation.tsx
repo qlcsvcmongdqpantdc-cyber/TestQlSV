@@ -351,6 +351,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         Vang: null
       };
 
+      // 1. Thêm mới vào bảng CSDL DanhSachSinhVien
       const { error } = await supabase
         .from('DanhSachSinhVien')
         .insert([studentDataToInsert]);
@@ -365,6 +366,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         setStudents((prev) => [...(Array.isArray(prev) ? prev : []), studentDataToInsert as unknown as Student]);
       }
 
+      // 2. Cập nhật trực tiếp vào danh sách phòng đang hiển thị và khóa cấu hình
       let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
       const roomIndex = updatedLockedRooms.findIndex(r => r.roomNumber === targetRoomForAdd);
 
@@ -383,6 +385,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         });
       }
 
+      // 3. Upsert cấu hình cố định phòng lên bảng RoomConfig
       const { error: configError } = await supabase.from('RoomConfig').upsert({
         id: 1,
         isLocked: true,
