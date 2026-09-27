@@ -365,8 +365,18 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         setStudents((prev) => [...(Array.isArray(prev) ? prev : []), studentDataToInsert as unknown as Student]);
       }
 
-      if (isRoomLocked && lockedRoomsData) {
-        const updatedLockedRooms = lockedRoomsData.map(room => {
+      let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : [];
+      const roomIndex = updatedLockedRooms.findIndex(r => r.roomNumber === targetRoomForAdd);
+
+      if (roomIndex >= 0) {
+        updatedLockedRooms[roomIndex] = {
+          ...updatedLockedRooms[roomIndex],
+          genderType: updatedLockedRooms[roomIndex].genderType === 'Trống' ? newStudentForm.GioiTinh : updatedLockedRooms[roomIndex].genderType,
+          students: [...(updatedLockedRooms[roomIndex].students || []), studentDataToInsert as unknown as Student]
+        };
+      } else {
+        const currentCalculated = calculateRoomAllocation();
+        updatedLockedRooms = currentCalculated.map(room => {
           if (room.roomNumber === targetRoomForAdd) {
             return {
               ...room,
@@ -376,16 +386,24 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           }
           return room;
         });
-        setLockedRoomsData(updatedLockedRooms);
-        
-        await supabase.from('RoomConfig').upsert({
-          id: 1,
-          isLocked: true,
-          locked_data: updatedLockedRooms
-        });
       }
 
-      showToast(`Đã thêm sinh viên ${newStudentForm.HoVaTen} vào Phòng ${targetRoomForAdd} thành công!`, 'success');
+      const { error: configError } = await supabase.from('RoomConfig').upsert({
+        id: 1,
+        isLocked: true,
+        locked_data: updatedLockedRooms
+      });
+
+      if (configError) {
+        showToast('Lỗi cập nhật cấu hình phòng: ' + configError.message, 'error');
+        setIsSubmittingAdd(false);
+        return;
+      }
+
+      setLockedRoomsData(updatedLockedRooms);
+      setIsRoomLocked(true);
+
+      showToast(`Đã thêm sinh viên ${newStudentForm.HoVaTen} vào đúng Phòng ${targetRoomForAdd} thành công!`, 'success');
       
       setIsAddStudentOpen(false);
       setTargetRoomForAdd(null);
