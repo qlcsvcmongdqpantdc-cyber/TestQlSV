@@ -94,7 +94,7 @@ export function ManageStudents({
     });
   };
 
-  // 🌟 ĐÃ HOÀN THIỆN: Xóa chính xác theo ID và gọi làm mới giao diện mượt mà
+  // 🌟 ĐÃ SỬA: Xóa dựa trên kết hợp MSSV và HoVaTen vì bảng không có cột id
   const handleResolveDuplicates = async () => {
     if (!canManage) return;
     try {
@@ -109,18 +109,18 @@ export function ManageStudents({
           const uniqueKey = item.id || `${group.mssv}_${i + 1}`;
           
           if (deleteSet.has(uniqueKey)) {
-            if (item.id) {
-              const { error } = await supabase
-                .from('DanhSachSinhVien')
-                .delete()
-                .eq('id', item.id); // Xóa chính xác tuyệt đối theo ID của Supabase
+            const mssvVal = group.mssv;
+            const tenVal = item.name || (item as any).HoVaTen || '';
+
+            const { error } = await supabase
+              .from('DanhSachSinhVien')
+              .delete()
+              .eq('MSSV', mssvVal)
+              .eq('HoVaTen', tenVal); // Kết hợp MSSV và Tên để xóa chính xác dòng trùng
                 
-              if (error) {
-                hasError = true;
-                console.error(`Lỗi xóa bản ghi ID ${item.id}:`, error.message);
-              }
-            } else {
-              console.warn(`Bản ghi MSSV ${group.mssv} thiếu ID, bỏ qua để tránh xóa nhầm.`);
+            if (error) {
+              hasError = true;
+              console.error(`Lỗi xóa bản ghi MSSV ${mssvVal}:`, error.message);
             }
           }
         }
@@ -498,7 +498,7 @@ export function ManageStudents({
                                 style={{ cursor: 'pointer', width: '16px', height: '16px' }}
                               />
                               <span>
-                                <b>{it.name}</b> — Lớp: {it.className || 'Trống'} {it.id ? `(ID: ${it.id})` : ''}
+                                <b>{it.name}</b> — Lớp: {it.className || 'Trống'}
                               </span>
                             </div>
                             <span style={{ fontWeight: 600, color: isMarkedForDelete ? '#dc2626' : '#16a34a' }}>
