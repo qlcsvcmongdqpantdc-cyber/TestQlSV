@@ -94,7 +94,7 @@ export function ManageStudents({
     });
   };
 
-  // 🌟 ĐÃ SỬA: Xóa dựa trên kết hợp MSSV và HoVaTen vì bảng không có cột id
+  // Xóa dựa trên kết hợp MSSV và HoVaTen vì bảng không có cột id
   const handleResolveDuplicates = async () => {
     if (!canManage) return;
     try {
@@ -116,7 +116,7 @@ export function ManageStudents({
               .from('DanhSachSinhVien')
               .delete()
               .eq('MSSV', mssvVal)
-              .eq('HoVaTen', tenVal); // Kết hợp MSSV và Tên để xóa chính xác dòng trùng
+              .eq('HoVaTen', tenVal);
                 
             if (error) {
               hasError = true;
@@ -134,7 +134,6 @@ export function ManageStudents({
 
       setShowDuplicateModal(false);
 
-      // Làm mới dữ liệu ngay lập tức mà không cần reload trang
       if (typeof onRefresh === 'function') {
         await onRefresh();
       } else {
@@ -197,10 +196,13 @@ export function ManageStudents({
     XLSX.writeFile(workbook, `${fileName}.xlsx`);
   };
 
+  // 🌟 ĐÃ SỬA: Lọc dữ liệu an toàn tránh lỗi toLowerCase của undefined
   const filteredStudents = students.filter((student) => {
-    const matchSearch =
-      student.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      student.studentId.toLowerCase().includes(searchTerm.toLowerCase());
+    const studentName = String(student?.name || '').toLowerCase();
+    const studentId = String(student?.studentId || '').toLowerCase();
+    const search = searchTerm.toLowerCase();
+
+    const matchSearch = studentName.includes(search) || studentId.includes(search);
     const matchClass = selectedClass === 'all' || student.className === selectedClass;
     const matchTeacher = selectedTeacher === 'all' || student.thayCo === selectedTeacher;
     return matchSearch && matchClass && matchTeacher;
