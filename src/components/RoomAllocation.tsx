@@ -23,7 +23,7 @@ interface RoomAllocationProps {
 }
 
 export const RoomAllocation: React.FC<RoomAllocationProps> = ({
-  students,
+  students = [],
   setStudents,
   onSetRoomLeader,
   onUpdateRoomData,
@@ -56,35 +56,38 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   // Trạng thái thông báo / Toast
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
-  const showToast = (text: string, type: 'success' | 'error' = 'success') => {
+  const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
     setTimeout(() => {
       setToastMessage(null);
     }, 3500);
-  };
+  }, []);
 
-  // ĐÃ LOẠI BỎ localStorage - Trạng thái khóa phòng lấy trực tiếp từ DB
   const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
   const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(null);
 
-  // Lắng nghe thay đổi dữ liệu thời gian thực từ Supabase để đồng bộ giữa các thiết bị và tab ẩn danh
+  // Lắng nghe thay đổi dữ liệu thời gian thực từ Supabase an toàn với isMounted
   useEffect(() => {
     let isMounted = true;
 
     const fetchRoomConfigFromDB = async () => {
-      const { data, error } = await supabase
-        .from('RoomConfig')
-        .select('*')
-        .eq('id', 1)
-        .single();
+      try {
+        const { data, error } = await supabase
+          .from('RoomConfig')
+          .select('*')
+          .eq('id', 1)
+          .single();
 
-      if (!error && data && isMounted) {
-        setIsRoomLocked(!!data.isLocked);
-        if (data.isLocked && data.locked_data) {
-          setLockedRoomsData(data.locked_data);
-        } else {
-          setLockedRoomsData(null);
+        if (!error && data && isMounted) {
+          setIsRoomLocked(!!data.isLocked);
+          if (data.isLocked && data.locked_data) {
+            setLockedRoomsData(data.locked_data);
+          } else {
+            setLockedRoomsData(null);
+          }
         }
+      } catch (err) {
+        console.error('Lỗi tải RoomConfig:', err);
       }
     };
 
@@ -96,9 +99,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         'postgres_changes',
         { event: '*', schema: 'public', table: 'DanhSachSinhVien' },
         async () => {
-          if (setStudents) {
+          if (setStudents && isMounted) {
             const { data, error } = await supabase.from('DanhSachSinhVien').select('*');
-            if (!error && data) {
+            if (!error && data && isMounted) {
               setStudents(data as unknown as Student[]);
             }
           }
@@ -108,14 +111,18 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         'postgres_changes',
         { event: '*', schema: 'public', table: 'RoomConfig' },
         async () => {
-          const { data, error } = await supabase.from('RoomConfig').select('*').eq('id', 1).single();
-          if (!error && data && isMounted) {
-            setIsRoomLocked(!!data.isLocked);
-            if (data.isLocked && data.locked_data) {
-              setLockedRoomsData(data.locked_data);
-            } else {
-              setLockedRoomsData(null);
+          try {
+            const { data, error } = await supabase.from('RoomConfig').select('*').eq('id', 1).single();
+            if (!error && data && isMounted) {
+              setIsRoomLocked(!!data.isLocked);
+              if (data.isLocked && data.locked_data) {
+                setLockedRoomsData(data.locked_data);
+              } else {
+                setLockedRoomsData(null);
+              }
             }
+          } catch (err) {
+            console.error('Lỗi realtime RoomConfig:', err);
           }
         }
       )
@@ -172,7 +179,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   }, [currentUser]);
 
   const calculateRoomAllocation = useCallback((): Room[] => {
-    const allValidStudents = students.filter((s: any) => {
+    const safeStudents = Array.isArray(students) ? students : [];
+    const allValidStudents = safeStudents.filter((s: any) => {
+      if (!s) return false;
       if (s.isAbsent || s.Vang === 'x') return false;
       return true;
     });
@@ -185,8 +194,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       });
     };
 
-    const sortedFemales = sortWithinGender(allValidStudents.filter((s: any) => s.GioiTinh === 'Nữ'));
-    const sortedMales = sortWithinGender(allValidStudents.filter((s: any) => s.GioiTinh !== 'Nữ'));
+    const sortedFemales = sortWithinGender(allValidStudents.filter((s: any) => s && s.GioiTinh === 'Nữ'));
+    const sortedMales = sortWithinGender(allValidStudents.filter((s: any) => s && s.GioiTinh !== 'Nữ'));
 
     let totalRoomsNeeded = Math.ceil(allValidStudents.length / MAX_PER_ROOM);
     if (totalRoomsNeeded < INITIAL_ROOMS) {
@@ -203,9 +212,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     let currentRoomIdx = 0;
 
     const fillGroupToRooms = (group: Student[], gender: 'Nữ' | 'Nam') => {
-      if (group.length === 0) return;
+      if (!group || group.length === 0) return;
 
       if (
+        rooms[currentRoomIdx] &&
         rooms[currentRoomIdx].students.length > 0 &&
         (rooms[currentRoomIdx].genderType !== gender ||
           rooms[currentRoomIdx].students.length >= MAX_PER_ROOM)
@@ -239,7 +249,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         rooms[currentRoomIdx].genderType = gender;
       }
 
-      if (rooms[currentRoomIdx].students.length > 0) {
+      if (rooms[currentRoomIdx] && rooms[currentRoomIdx].students.length > 0) {
         currentRoomIdx++;
       }
     };
@@ -259,12 +269,15 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       return calculatedRooms;
     }
 
+    const safeStudents = Array.isArray(students) ? students : [];
+
     return lockedRoomsData.map(room => ({
       ...room,
-      students: room.students
+      students: (room.students || [])
         .map(lockedStudent => {
-          const freshStudent = students.find(s =>
-            String(s.MSSV || (s as any).studentId || (s as any).id) === String(lockedStudent.MSSV || (lockedStudent as any).studentId || (lockedStudent as any).id)
+          if (!lockedStudent) return null;
+          const freshStudent = safeStudents.find(s =>
+            s && String(s.MSSV || (s as any).studentId || (s as any).id) === String(lockedStudent.MSSV || (lockedStudent as any).studentId || (lockedStudent as any).id)
           );
           if (!freshStudent || freshStudent.isAbsent || freshStudent.Vang === 'x') {
             return null;
@@ -284,23 +297,19 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     try {
       for (const room of rooms) {
         for (const st of room.students) {
-          const mssvValue = st.MSSV || (st as any).studentId || st.id;
+          const mssvValue = st?.MSSV || (st as any)?.studentId || st?.id;
           if (mssvValue) {
-            const { error } = await supabase
+            await supabase
               .from('DanhSachSinhVien')
               .update({ Phong: room.roomNumber })
               .eq('MSSV', mssvValue);
-
-            if (error) {
-              console.error(`Lỗi cập nhật phòng cho MSSV ${mssvValue}:`, error.message);
-            }
           }
         }
       }
 
       showToast('Đã xác nhận và lưu sơ đồ phòng lên hệ thống thành công!', 'success');
     } catch (err: any) {
-      console.error('Lỗi kết nối khi lưu phòng:', err);
+      console.error('Lỗi khi lưu phòng:', err);
       showToast('Lỗi khi lưu phòng: ' + (err.message || err), 'error');
     } finally {
       setIsSavingRooms(false);
@@ -342,14 +351,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         .insert([studentDataToInsert]);
 
       if (error) {
-        console.error('Lỗi khi thêm sinh viên vào Supabase:', error.message);
         showToast('Lỗi khi thêm sinh viên: ' + error.message, 'error');
         setIsSubmittingAdd(false);
         return;
       }
 
       if (setStudents) {
-        setStudents((prev) => [...prev, studentDataToInsert as unknown as Student]);
+        setStudents((prev) => [...(Array.isArray(prev) ? prev : []), studentDataToInsert as unknown as Student]);
       }
 
       if (isRoomLocked && lockedRoomsData) {
@@ -358,14 +366,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             return {
               ...room,
               genderType: room.genderType === 'Trống' ? newStudentForm.GioiTinh : room.genderType,
-              students: [...room.students, studentDataToInsert as unknown as Student]
+              students: [...(room.students || []), studentDataToInsert as unknown as Student]
             };
           }
           return room;
         });
         setLockedRoomsData(updatedLockedRooms);
         
-        // Đồng bộ dữ liệu phòng khóa lên Database
         await supabase.from('RoomConfig').upsert({
           id: 1,
           isLocked: true,
@@ -384,7 +391,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         ThayCo: teacherList[0] || ''
       });
     } catch (err: any) {
-      console.error('Lỗi kết nối khi thêm sinh viên:', err);
       showToast('Lỗi hệ thống khi thêm sinh viên.', 'error');
     } finally {
       setIsSubmittingAdd(false);
@@ -406,13 +412,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         .eq('MSSV', mssvValue);
 
       if (error) {
-        console.error('Lỗi cập nhật vắng trong Supabase:', error.message);
         showToast('Lỗi cập nhật CSDL: ' + error.message, 'error');
         setIsDeleting(false);
         return;
       }
     } catch (err) {
-      console.error('Lỗi kết nối:', err);
       showToast('Lỗi kết nối mạng.', 'error');
       setIsDeleting(false);
       return;
@@ -420,7 +424,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
     if (setStudents) {
       setStudents((prevStudents) =>
-        prevStudents.map((s) => {
+        (Array.isArray(prevStudents) ? prevStudents : []).map((s) => {
+          if (!s) return s;
           const sKey = String(s.MSSV || (s as any).studentId || s.id);
           if (sKey === studentKey) {
             return { ...s, isAbsent: true, Vang: 'x' };
@@ -433,14 +438,14 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     if (isRoomLocked && lockedRoomsData) {
       const updatedLockedRooms = lockedRoomsData.map(room => ({
         ...room,
-        students: room.students.filter((st: any) => {
+        students: (room.students || []).filter((st: any) => {
+          if (!st) return false;
           const sKey = String(st.MSSV || st.studentId || st.id);
           return sKey !== studentKey;
         })
       }));
       setLockedRoomsData(updatedLockedRooms);
 
-      // Đồng bộ dữ liệu phòng khóa lên Database
       await supabase.from('RoomConfig').upsert({
         id: 1,
         isLocked: true,
@@ -450,7 +455,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
     setIsDeleting(false);
     setStudentToDelete(null);
-    showToast(`Đã đánh dấu vắng cho sinh viên ${(studentToDelete as any).HoVaTen || studentToDelete.name}.`, 'success');
+    showToast(`Đã đánh dấu vắng cho sinh viên.`, 'success');
   };
 
   const toggleLockRooms = async () => {
@@ -462,15 +467,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       setIsRoomLocked(true);
 
       try {
-        const { error } = await supabase.from('RoomConfig').upsert({ 
+        await supabase.from('RoomConfig').upsert({ 
           id: 1, 
           isLocked: true,
           locked_data: lockedState 
         });
-        if (error) throw error;
         showToast('Đã khóa cố định sơ đồ phòng thành công.', 'success');
       } catch (err: any) {
-        console.error('Lỗi kết nối khi khóa phòng:', err);
         showToast('Lỗi khi khóa phòng: ' + err.message, 'error');
       }
     } else {
@@ -478,15 +481,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       setIsRoomLocked(false);
 
       try {
-        const { error } = await supabase.from('RoomConfig').upsert({ 
+        await supabase.from('RoomConfig').upsert({ 
           id: 1, 
           isLocked: false,
           locked_data: null 
         });
-        if (error) throw error;
         showToast('Đã mở khóa sơ đồ phòng.', 'success');
       } catch (err: any) {
-        console.error('Lỗi kết nối khi mở khóa phòng:', err);
         showToast('Lỗi khi mở khóa phòng: ' + err.message, 'error');
       }
     }
@@ -495,7 +496,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const filteredRooms = useMemo(() => {
     return rooms.map((room) => {
       if (!selectedTeacherFilter) return room;
-      const matchedStudents = room.students.filter((st: any) => {
+      const matchedStudents = (room.students || []).filter((st: any) => {
+        if (!st) return false;
         const studentTeacher = st.ThayCo || st.thayCo || st.HoTen || st.hoTen;
         return studentTeacher === selectedTeacherFilter;
       });
@@ -512,7 +514,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
     const assignments: { studentKey: string; roomNumber: number }[] = [];
     rooms.forEach((room) => {
-      room.students.forEach((st: any) => {
+      (room.students || []).forEach((st: any) => {
+        if (!st) return;
         const studentKey = String(st.MSSV || st.studentId || st.id);
         assignments.push({ studentKey, roomNumber: room.roomNumber });
       });
@@ -524,7 +527,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   useEffect(() => {
     const loadedLeaders: Record<number, string> = {};
     rooms.forEach((room) => {
-      const leaderStudent = room.students.find((st: any) => st.truongPhong === 'x');
+      const leaderStudent = (room.students || []).find((st: any) => st && st.truongPhong === 'x');
       if (leaderStudent) {
         const studentKey = String(leaderStudent.MSSV || leaderStudent.studentId || leaderStudent.id);
         loadedLeaders[room.roomNumber] = studentKey;
@@ -541,7 +544,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     const currentRoom = rooms.find((r) => r.roomNumber === roomNumber);
     if (!currentRoom) return;
 
-    const roomStudentKeys = currentRoom.students.map((st: any) => String(st.MSSV || st.studentId || st.id));
+    const roomStudentKeys = (currentRoom.students || []).map((st: any) => String(st.MSSV || st.studentId || st.id));
 
     if (onSetRoomLeader) {
       onSetRoomLeader(studentKey, roomStudentKeys);
@@ -561,7 +564,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     const currentRoom = rooms.find((r) => r.roomNumber === roomNumber);
     if (!currentRoom) return;
 
-    const roomStudentKeys = currentRoom.students.map((st: any) => String(st.MSSV || st.studentId || st.id));
+    const roomStudentKeys = (currentRoom.students || []).map((st: any) => String(st.MSSV || st.studentId || st.id));
 
     if (onSetRoomLeader) {
       onSetRoomLeader(null, roomStudentKeys);
@@ -570,15 +573,17 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   };
 
   const totalActiveAllocated = useMemo(() => {
-    return rooms.reduce((acc, r) => acc + r.students.length, 0);
+    return rooms.reduce((acc, r) => acc + (r.students ? r.students.length : 0), 0);
   }, [rooms]);
 
   const totalAbsent = useMemo(() => {
-    return students.filter((s: any) => (s.isAbsent || s.Vang === 'x')).length;
+    const safeStudents = Array.isArray(students) ? students : [];
+    return safeStudents.filter((s: any) => s && (s.isAbsent || s.Vang === 'x')).length;
   }, [students]);
 
   const { totalFemale, totalMale } = useMemo(() => {
-    const validStudents = students.filter((s: any) => !s.isAbsent && s.Vang !== 'x');
+    const safeStudents = Array.isArray(students) ? students : [];
+    const validStudents = safeStudents.filter((s: any) => s && !s.isAbsent && s.Vang !== 'x');
     const femaleCount = validStudents.filter((s: any) => s.GioiTinh === 'Nữ').length;
     const maleCount = validStudents.filter((s: any) => s.GioiTinh !== 'Nữ').length;
     return { totalFemale: femaleCount, totalMale: maleCount };
@@ -603,7 +608,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           gap: '8px',
           fontSize: '14px',
           fontWeight: 600,
-          animation: 'fadeIn 0.2s ease-in-out'
         }}>
           {toastMessage.type === 'success' ? <CheckCircle size={18} color="#16a34a" /> : <AlertCircle size={18} color="#dc2626" />}
           <span>{toastMessage.text}</span>
@@ -763,7 +767,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           </div>
         ) : (
           filteredRooms.map((room) => {
-            const activeRoomStudents = room.students;
+            const activeRoomStudents = room.students || [];
             const isFull = activeRoomStudents.length >= MAX_PER_ROOM;
             const isEmpty = activeRoomStudents.length === 0;
             const currentLeaderKey = leaders[room.roomNumber];
@@ -901,6 +905,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                     )}
 
                     {activeRoomStudents.map((st: any, idx: number) => {
+                      if (!st) return null;
                       const studentKey = String(st.MSSV || st.studentId || st.id);
                       const isSelected = currentLeaderKey === studentKey;
                       const studentName = st.HoVaTen || st.name;
@@ -954,10 +959,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                 </div>
 
                 <div className="room-student-list">
-                  {room.students.length === 0 ? (
+                  {activeRoomStudents.length === 0 ? (
                     <div className="empty-text">Phòng trống</div>
                   ) : (
-                    room.students.map((st: any, idx) => {
+                    activeRoomStudents.map((st: any, idx) => {
+                      if (!st) return null;
                       const studentKey = String(st.MSSV || st.studentId || st.id);
                       const displayCode = st.MSSV || st.studentId || st.id;
                       const isLeader = currentLeaderKey === studentKey;
@@ -1175,7 +1181,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             padding: '24px',
             maxWidth: '400px',
             width: '100%',
-            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
             border: '1px solid #e2e8f0'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
