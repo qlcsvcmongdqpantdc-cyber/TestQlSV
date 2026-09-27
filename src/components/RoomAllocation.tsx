@@ -64,7 +64,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
   const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(null);
 
-  // Sửa lại useEffect quản lý Realtime và unmount an toàn tránh trắng trang
+  // Quản lý Realtime và unmount an toàn tránh trắng trang
   useEffect(() => {
     let isMounted = true;
     let channel: any = null;
@@ -269,6 +269,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return calculateRoomAllocation();
   }, [calculateRoomAllocation]);
 
+  // Cố định phòng khi khóa: Chỉ ẩn sinh viên vắng khỏi phòng hiện tại, không dôn lệch sang phòng khác
   const getRoomsToDisplay = useMemo(() => {
     if (!isRoomLocked || !lockedRoomsData) {
       return calculatedRooms;
@@ -421,46 +422,45 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         setIsDeleting(false);
         return;
       }
+
+      if (isRoomLocked && lockedRoomsData) {
+        const updatedLockedRooms = lockedRoomsData.map(room => ({
+          ...room,
+          students: (room.students || []).filter((st: any) => {
+            if (!st) return false;
+            const sKey = String(st.MSSV || st.studentId || st.id);
+            return sKey !== studentKey;
+          })
+        }));
+        setLockedRoomsData(updatedLockedRooms);
+
+        await supabase.from('RoomConfig').upsert({
+          id: 1,
+          isLocked: true,
+          locked_data: updatedLockedRooms
+        });
+      }
+
+      if (setStudents) {
+        setStudents((prevStudents) =>
+          (Array.isArray(prevStudents) ? prevStudents : []).map((s) => {
+            if (!s) return s;
+            const sKey = String(s.MSSV || (s as any).studentId || s.id);
+            if (sKey === studentKey) {
+              return { ...s, isAbsent: true, Vang: 'x' };
+            }
+            return s;
+          })
+        );
+      }
+
+      showToast(`Đã đánh dấu vắng cho sinh viên và cập nhật sĩ số phòng.`, 'success');
     } catch (err) {
       showToast('Lỗi kết nối mạng.', 'error');
+    } finally {
       setIsDeleting(false);
-      return;
+      setStudentToDelete(null);
     }
-
-    if (setStudents) {
-      setStudents((prevStudents) =>
-        (Array.isArray(prevStudents) ? prevStudents : []).map((s) => {
-          if (!s) return s;
-          const sKey = String(s.MSSV || (s as any).studentId || s.id);
-          if (sKey === studentKey) {
-            return { ...s, isAbsent: true, Vang: 'x' };
-          }
-          return s;
-        })
-      );
-    }
-
-    if (isRoomLocked && lockedRoomsData) {
-      const updatedLockedRooms = lockedRoomsData.map(room => ({
-        ...room,
-        students: (room.students || []).filter((st: any) => {
-          if (!st) return false;
-          const sKey = String(st.MSSV || st.studentId || st.id);
-          return sKey !== studentKey;
-        })
-      }));
-      setLockedRoomsData(updatedLockedRooms);
-
-      await supabase.from('RoomConfig').upsert({
-        id: 1,
-        isLocked: true,
-        locked_data: updatedLockedRooms
-      });
-    }
-
-    setIsDeleting(false);
-    setStudentToDelete(null);
-    showToast(`Đã đánh dấu vắng cho sinh viên.`, 'success');
   };
 
   const toggleLockRooms = async () => {
@@ -625,13 +625,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             Sơ Đồ Phòng KTX QPAN ({filteredRooms.length}/{rooms.length} Phòng)
             {isRoomLocked && (
               <span style={{ fontSize: '12px', background: '#fee2e2', color: '#dc2626', padding: '2px 8px', borderRadius: '4px', border: '1px solid #f87171' }}>
-                🔒 Đã khóa sơ đồ (Đồng bộ Realtime từ Database)
+                🔒 Đã khóa sơ đồ (Giữ cố định vị trí phòng)
               </span>
             )}
           </h2>
           <p>
             {isRoomLocked
-              ? 'Phòng đã được khóa cố định trên hệ thống chung. Bấm nút dấu cộng (+) trên mỗi phòng để thêm sinh viên mới.'
+              ? 'Phòng đã được khóa cố định. Khi cho sinh viên nghỉ, sĩ số phòng giảm nhưng vị trí các phòng khác được giữ nguyên.'
               : 'Đang ở chế độ tự động phân phòng.'}
           </p>
         </div>
@@ -1208,7 +1208,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             </div>
 
             <p style={{ fontSize: '14px', color: '#334155', marginBottom: '20px', lineHeight: '1.5' }}>
-              Bạn có chắc chắn muốn đánh dấu sinh viên <strong>{(studentToDelete as any).HoVaTen || studentToDelete.name}</strong> ({studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id}) là vắng mặt và ẩn khỏi sơ đồ phòng không?
+              Bạn có chắc chắn muốn đánh dấu sinh viên <strong>{(studentToDelete as any).HoVaTen || studentToDelete.name}</strong> ({studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id}) là vắng mặt và giảm sĩ số phòng không?
             </p>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
