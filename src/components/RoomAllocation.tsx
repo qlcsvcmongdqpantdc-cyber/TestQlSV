@@ -351,6 +351,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         Vang: null
       };
 
+      // 1. Thêm mới vào bảng CSDL DanhSachSinhVien
       const { error } = await supabase
         .from('DanhSachSinhVien')
         .insert([studentDataToInsert]);
@@ -365,7 +366,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         setStudents((prev) => [...(Array.isArray(prev) ? prev : []), studentDataToInsert as unknown as Student]);
       }
 
-      let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : [];
+      // 2. Cập nhật trực tiếp vào danh sách phòng đang hiển thị và khóa cấu hình
+      let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
       const roomIndex = updatedLockedRooms.findIndex(r => r.roomNumber === targetRoomForAdd);
 
       if (roomIndex >= 0) {
@@ -375,19 +377,15 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           students: [...(updatedLockedRooms[roomIndex].students || []), studentDataToInsert as unknown as Student]
         };
       } else {
-        const currentCalculated = calculateRoomAllocation();
-        updatedLockedRooms = currentCalculated.map(room => {
-          if (room.roomNumber === targetRoomForAdd) {
-            return {
-              ...room,
-              genderType: room.genderType === 'Trống' ? newStudentForm.GioiTinh : room.genderType,
-              students: [...(room.students || []), studentDataToInsert as unknown as Student]
-            };
-          }
-          return room;
+        updatedLockedRooms.push({
+          roomNumber: targetRoomForAdd,
+          students: [studentDataToInsert as unknown as Student],
+          genderType: newStudentForm.GioiTinh,
+          hasPenalized: false
         });
       }
 
+      // 3. Upsert cấu hình cố định phòng lên bảng RoomConfig
       const { error: configError } = await supabase.from('RoomConfig').upsert({
         id: 1,
         isLocked: true,
