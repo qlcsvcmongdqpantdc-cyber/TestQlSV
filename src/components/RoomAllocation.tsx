@@ -64,6 +64,89 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
   const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(null);
 
+  // Hàm tính toán phân phòng cốt lõi
+  const calculateRoomAllocation = useCallback((): Room[] => {
+    const safeStudents = Array.isArray(students) ? students : [];
+    const allValidStudents = safeStudents.filter((s: any) => {
+      if (!s) return false;
+      if (s.isAbsent || s.Vang === 'x') return false;
+      return true;
+    });
+
+    const sortWithinGender = (group: Student[]) => {
+      return group.sort((a, b) => {
+        const nameA = String((a as any)?.HoVaTen || (a as any)?.name || '');
+        const nameB = String((b as any)?.HoVaTen || (b as any)?.name || '');
+        return nameA.localeCompare(nameB, 'vi', { sensitivity: 'accent' });
+      });
+    };
+
+    const sortedFemales = sortWithinGender(allValidStudents.filter((s: any) => s && s.GioiTinh === 'Nữ'));
+    const sortedMales = sortWithinGender(allValidStudents.filter((s: any) => s && s.GioiTinh !== 'Nữ'));
+
+    let totalRoomsNeeded = Math.ceil(allValidStudents.length / MAX_PER_ROOM);
+    if (totalRoomsNeeded < INITIAL_ROOMS) {
+      totalRoomsNeeded = INITIAL_ROOMS;
+    }
+
+    const rooms: Room[] = Array.from({ length: totalRoomsNeeded }, (_, i) => ({
+      roomNumber: i + 1,
+      students: [],
+      genderType: 'Trống',
+      hasPenalized: false,
+    }));
+
+    let currentRoomIdx = 0;
+
+    const fillGroupToRooms = (group: Student[], gender: 'Nữ' | 'Nam') => {
+      if (!group || group.length === 0) return;
+
+      if (
+        rooms[currentRoomIdx] &&
+        rooms[currentRoomIdx].students.length > 0 &&
+        (rooms[currentRoomIdx].genderType !== gender ||
+          rooms[currentRoomIdx].students.length >= MAX_PER_ROOM)
+      ) {
+        currentRoomIdx++;
+      }
+
+      for (const student of group) {
+        if (currentRoomIdx >= rooms.length) {
+          rooms.push({
+            roomNumber: rooms.length + 1,
+            students: [],
+            genderType: 'Trống',
+            hasPenalized: false,
+          });
+        }
+
+        if (rooms[currentRoomIdx].students.length >= MAX_PER_ROOM) {
+          currentRoomIdx++;
+          if (currentRoomIdx >= rooms.length) {
+            rooms.push({
+              roomNumber: rooms.length + 1,
+              students: [],
+              genderType: 'Trống',
+              hasPenalized: false,
+            });
+          }
+        }
+
+        rooms[currentRoomIdx].students.push(student);
+        rooms[currentRoomIdx].genderType = gender;
+      }
+
+      if (rooms[currentRoomIdx] && rooms[currentRoomIdx].students.length > 0) {
+        currentRoomIdx++;
+      }
+    };
+
+    fillGroupToRooms(sortedFemales, 'Nữ');
+    fillGroupToRooms(sortedMales, 'Nam');
+
+    return rooms;
+  }, [students, MAX_PER_ROOM, INITIAL_ROOMS]);
+
   // Quản lý Realtime và unmount an toàn tránh trắng trang
   useEffect(() => {
     let isMounted = true;
@@ -183,94 +266,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       : true;
   }, [currentUser]);
 
-  const calculateRoomAllocation = useCallback((): Room[] => {
-    const safeStudents = Array.isArray(students) ? students : [];
-    const allValidStudents = safeStudents.filter((s: any) => {
-      if (!s) return false;
-      if (s.isAbsent || s.Vang === 'x') return false;
-      return true;
-    });
-
-    const sortWithinGender = (group: Student[]) => {
-      return group.sort((a, b) => {
-        const nameA = String((a as any)?.HoVaTen || (a as any)?.name || '');
-        const nameB = String((b as any)?.HoVaTen || (b as any)?.name || '');
-        return nameA.localeCompare(nameB, 'vi', { sensitivity: 'accent' });
-      });
-    };
-
-    const sortedFemales = sortWithinGender(allValidStudents.filter((s: any) => s && s.GioiTinh === 'Nữ'));
-    const sortedMales = sortWithinGender(allValidStudents.filter((s: any) => s && s.GioiTinh !== 'Nữ'));
-
-    let totalRoomsNeeded = Math.ceil(allValidStudents.length / MAX_PER_ROOM);
-    if (totalRoomsNeeded < INITIAL_ROOMS) {
-      totalRoomsNeeded = INITIAL_ROOMS;
-    }
-
-    const rooms: Room[] = Array.from({ length: totalRoomsNeeded }, (_, i) => ({
-      roomNumber: i + 1,
-      students: [],
-      genderType: 'Trống',
-      hasPenalized: false,
-    }));
-
-    let currentRoomIdx = 0;
-
-    const fillGroupToRooms = (group: Student[], gender: 'Nữ' | 'Nam') => {
-      if (!group || group.length === 0) return;
-
-      if (
-        rooms[currentRoomIdx] &&
-        rooms[currentRoomIdx].students.length > 0 &&
-        (rooms[currentRoomIdx].genderType !== gender ||
-          rooms[currentRoomIdx].students.length >= MAX_PER_ROOM)
-      ) {
-        currentRoomIdx++;
-      }
-
-      for (const student of group) {
-        if (currentRoomIdx >= rooms.length) {
-          rooms.push({
-            roomNumber: rooms.length + 1,
-            students: [],
-            genderType: 'Trống',
-            hasPenalized: false,
-          });
-        }
-
-        if (rooms[currentRoomIdx].students.length >= MAX_PER_ROOM) {
-          currentRoomIdx++;
-          if (currentRoomIdx >= rooms.length) {
-            rooms.push({
-              roomNumber: rooms.length + 1,
-              students: [],
-              genderType: 'Trống',
-              hasPenalized: false,
-            });
-          }
-        }
-
-        rooms[currentRoomIdx].students.push(student);
-        rooms[currentRoomIdx].genderType = gender;
-      }
-
-      if (rooms[currentRoomIdx] && rooms[currentRoomIdx].students.length > 0) {
-        currentRoomIdx++;
-      }
-    };
-
-    fillGroupToRooms(sortedFemales, 'Nữ');
-    fillGroupToRooms(sortedMales, 'Nam');
-
-    return rooms;
-  }, [students, MAX_PER_ROOM, INITIAL_ROOMS]);
-
-  const calculatedRooms = useMemo(() => {
-    return calculateRoomAllocation();
-  }, [calculateRoomAllocation]);
-
+  // Hiển thị phòng dựa theo trạng thái khóa hoặc tạm tính nếu chưa khóa
   const getRoomsToDisplay = useMemo(() => {
-    let baseRooms = (!isRoomLocked || !lockedRoomsData) ? calculatedRooms : lockedRoomsData;
+    let baseRooms = (!isRoomLocked || !lockedRoomsData) ? calculateRoomAllocation() : lockedRoomsData;
     const safeStudents = Array.isArray(students) ? students : [];
 
     return baseRooms.map(room => {
@@ -300,18 +298,21 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         students: Array.from(uniqueStudentMap.values()) as Student[]
       };
     });
-  }, [isRoomLocked, lockedRoomsData, calculatedRooms, students]);
+  }, [isRoomLocked, lockedRoomsData, calculateRoomAllocation, students]);
 
   const rooms = getRoomsToDisplay;
 
+  // Xử lý khi người dùng bấm nút "Xác Nhận Phòng"
   const handleConfirmAndSaveRooms = async () => {
     if (!canManage) return;
     setIsSavingRooms(true);
 
     try {
+      // 1. Thực hiện tính toán phân phòng mới dựa trên dữ liệu hiện tại
+      const newlyCalculatedRooms = calculateRoomAllocation();
       const updates: { mssv: any; roomNumber: number }[] = [];
 
-      rooms.forEach((room) => {
+      newlyCalculatedRooms.forEach((room) => {
         (room.students || []).forEach((st: any) => {
           const mssvValue = st?.MSSV || st?.studentId || st?.id;
           if (mssvValue) {
@@ -323,6 +324,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         });
       });
 
+      // 2. Cập nhật cột Phong cho từng sinh viên trong CSDL Supabase
       for (const item of updates) {
         const { error } = await supabase
           .from('DanhSachSinhVien')
@@ -334,22 +336,26 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         }
       }
 
-      const currentRoomState = rooms;
-      setLockedRoomsData(currentRoomState);
+      // 3. Khóa trạng thái và lưu cấu hình phòng cố định lên CSDL
+      setLockedRoomsData(newlyCalculatedRooms);
       setIsRoomLocked(true);
 
-      await supabase.from('RoomConfig').upsert({
+      const { error: configError } = await supabase.from('RoomConfig').upsert({
         id: 1,
         isLocked: true,
-        locked_data: currentRoomState
+        locked_data: newlyCalculatedRooms
       });
 
-      showToast('Đã xác nhận và lưu cố định sơ đồ phòng lên hệ thống thành công!', 'success');
+      if (configError) {
+        throw new Error(configError.message);
+      }
+
+      showToast('Đã xác nhận, phân phòng mới và lưu cố định thành công!', 'success');
     } catch (err: any) {
       console.error('Lỗi khi lưu phòng:', err);
       showToast('Lỗi khi lưu phòng: ' + (err?.message || err), 'error');
     } finally {
-    setIsSavingRooms(false);
+      setIsSavingRooms(false);
     }
   };
 
@@ -675,8 +681,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           </h2>
           <p>
             {isRoomLocked
-              ? 'Phòng đã được khóa cố định. Khi cho sinh viên nghỉ, sĩ số phòng giảm nhưng vị trí các phòng khác được giữ nguyên.'
-              : 'Đang ở chế độ tự động phân phòng.'}
+              ? 'Phòng đã được khóa cố định. Bấm "Xác Nhận Phòng" để tính toán phân phòng mới và lưu lại.'
+              : 'Đang hiển thị chế độ xem trước. Bấm "Xác Nhận Phòng" để chạy thuật toán phân phòng và lưu vào hệ thống.'}
           </p>
         </div>
 
@@ -702,7 +708,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                 }}
               >
                 <CheckCircle size={16} />
-                {isSavingRooms ? 'Đang lưu...' : 'Xác Nhận Phòng'}
+                {isSavingRooms ? 'Đang chạy và lưu...' : 'Xác Nhận Phòng'}
               </button>
 
               <button

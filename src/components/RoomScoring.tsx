@@ -71,20 +71,23 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
 
   const canManage = currentUser?.role === 'admin' || currentUser?.can_manage === true;
 
-  // Chuẩn hóa dữ liệu sinh viên
+  const getStudentKey = (st: ScoringStudent, index: number) => {
+    const msv = String(st.studentId || st.id || '').trim();
+    return msv ? msv : `index_${index}`;
+  };
+
   const processedStudents = useMemo<ScoringStudent[]>(() => {
     if (!students || students.length === 0) return [];
     const activeStudents = (students as ScoringStudent[]).filter((s) => !s.isAbsent);
 
     return activeStudents.map((st: any) => {
-      const rawRoom = (st.Phong ?? st.phong ?? st.roomName ?? st.room ?? st['Phòng'] ?? 'Chưa phân phòng').toString().trim();
-      const formattedRoom = /^\d+$/.test(rawRoom) ? String(parseInt(rawRoom, 10)) : rawRoom;
+      const roomValue = (st.Phong ?? st.room ?? 'Chưa phân phòng').toString().trim();
 
       return {
         ...st,
         studentId: (st.studentId ?? st.id ?? st.mssv ?? st.MSV ?? st['MSSV'] ?? '').toString().trim(),
         name: (st.name ?? st.hoVaTen ?? st.HoVaTen ?? st['Họ và Tên'] ?? '').toString().trim(),
-        room: formattedRoom,
+        room: roomValue !== '' ? roomValue : 'Chưa phân phòng',
         thayCo: (st.ThayCo ?? st.thayco ?? st.thayCo ?? st.teacher ?? st['Giảng viên'] ?? 'Chưa phân công').toString().trim(),
       };
     });
@@ -96,12 +99,13 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
       try {
         let currentViolations = [...DEFAULT_VIOLATIONS];
         const { data: ruleData, error: ruleError } = await supabase.from('ViolationRules').select('*');
+        
         if (!ruleError && ruleData && ruleData.length > 0) {
           const customRules = ruleData.map((r: any) => ({
-            code: r.Code,
-            displayCode: r.DisplayCode || r.Code,
-            label: r.Label || `Lỗi: ${r.Code}`,
-            penalty: Number(r.Penalty) || 1,
+            code: r.Code || r.code,
+            displayCode: r.DisplayCode || r.displayCode || r.Code || r.code,
+            label: r.Label || r.label || `Lỗi: ${r.Code || r.code}`,
+            penalty: Number(r.Penalty ?? r.penalty) || 1,
           }));
           const mapRules = new Map();
           DEFAULT_VIOLATIONS.forEach(v => mapRules.set(v.code, v));
@@ -121,12 +125,13 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
           const loadedNotes: Record<string, string> = {};
 
           data.forEach((row: any) => {
-            const msv = String(row.MSV);
-            loadedNotes[msv] = row.GhiChu || '';
+            const msv = String(row.MSV || row.msv || '');
+            if (!msv) return;
+            loadedNotes[msv] = row.GhiChu || row.ghiChu || '';
             loadedScores[msv] = {};
 
             for (let day = 1; day <= 10; day++) {
-              const dayValue = row[String(day)];
+              const dayValue = row[String(day)] || row[day];
               if (dayValue) {
                 const codes = String(dayValue).split(',');
                 const dayEntries: RecordEntry[] = [];
@@ -170,9 +175,18 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     });
 
     return list.sort((a, b) => {
-      const rA = parseInt(a.room || '0', 10);
-      const rB = parseInt(b.room || '0', 10);
-      if (rA !== rB) return rA - rB;
+      const rA = a.room || '';
+      const rB = b.room || '';
+      const numA = parseInt(rA, 10);
+      const numB = parseInt(rB, 10);
+      
+      if (!isNaN(numA) && !isNaN(numB)) {
+        if (numA !== numB) return numA - numB;
+      } else {
+        const comp = rA.localeCompare(rB, 'vi', { sensitivity: 'base' });
+        if (comp !== 0) return comp;
+      }
+
       return (a.name || '').localeCompare(b.name || '', 'vi', { sensitivity: 'base' });
     });
   }, [processedStudents, selectedRoom, selectedTeacher, searchTerm]);
@@ -205,11 +219,13 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     const toastId = toast.loading('Đang lưu và đẩy dữ liệu lên cơ sở dữ liệu...');
 
     try {
-      const payloads = processedStudents.map((st, idx) => {
-        const msv = String(st.studentId || st.id || idx);
+      const rawPayloads = processedStudents.map((st, idx) => {
+        const studentKey = getStudentKey(st, idx);
+        const msv = String(st.studentId || st.id || studentKey);
         const hoVaTen = st.name || '';
-        const studentScores = scores[msv] || {};
-        const noteValue = notes[msv] || '';
+        const currentRoom = st.room || '';
+        const studentScores = scores[studentKey] || {};
+        const noteValue = notes[studentKey] || '';
 
         let penalty = 0;
         Object.values(studentScores).forEach((dayData) => {
@@ -220,6 +236,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
         const recordPayload: Record<string, any> = {
           MSV: msv,
           HoVaTen: hoVaTen,
+          Phong: currentRoom,
           DiemNeNep: finalScore,
           GhiChu: noteValue,
         };
@@ -231,6 +248,14 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
 
         return recordPayload;
       });
+
+      const uniquePayloadMap = new Map<string, Record<string, any>>();
+      rawPayloads.forEach((item) => {
+        if (item.MSV) {
+          uniquePayloadMap.set(item.MSV, item);
+        }
+      });
+      const payloads = Array.from(uniquePayloadMap.values());
 
       const { error } = await supabase.from('ChamDiem').upsert(payloads, { onConflict: 'MSV' });
 
@@ -251,13 +276,13 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     }
   };
 
-  const handleToggleViolation = (student: ScoringStudent, day: number, code: string, displayCode: string, penalty: number) => {
+  const handleToggleViolation = (student: ScoringStudent, index: number, day: number, code: string, displayCode: string, penalty: number) => {
     if (!canManage) {
       toast.error('Bạn không có quyền thay đổi điểm nề nếp!');
       return;
     }
 
-    const studentKey = String(student.studentId || student.id);
+    const studentKey = getStudentKey(student, index);
     setScores((prev) => {
       const studentData = prev[studentKey] || {};
       const dayData = studentData[day] || [];
@@ -267,13 +292,13 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     });
   };
 
-  const handleNoteChange = (student: ScoringStudent, newNote: string) => {
+  const handleNoteChange = (student: ScoringStudent, index: number, newNote: string) => {
     if (!canManage) return;
-    const studentKey = String(student.studentId || student.id);
+    const studentKey = getStudentKey(student, index);
     setNotes((prev) => ({ ...prev, [studentKey]: newNote }));
   };
 
-  const handleSelectChange = async (student: ScoringStudent, day: number, selectedValue: string, eventTarget: HTMLSelectElement) => {
+  const handleSelectChange = async (student: ScoringStudent, index: number, day: number, selectedValue: string, eventTarget: HTMLSelectElement) => {
     if (!canManage) {
       toast.error('Bạn không có quyền thực hiện thao tác này!');
       eventTarget.value = '';
@@ -327,11 +352,11 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
         setViolations((prev) => [...prev, newRule]);
       }
 
-      handleToggleViolation(student, day, newRule.code, newRule.displayCode, newRule.penalty);
+      handleToggleViolation(student, index, day, newRule.code, newRule.displayCode, newRule.penalty);
     } else {
       const target = violations.find((v) => v.code === selectedValue);
       if (target) {
-        handleToggleViolation(student, day, target.code, target.displayCode, target.penalty);
+        handleToggleViolation(student, index, day, target.code, target.displayCode, target.penalty);
       }
     }
     eventTarget.value = '';
@@ -421,7 +446,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
     const wb = XLSX.utils.book_new();
 
     const allStudentsData = processedStudents.map((st, idx) => {
-      const studentKey = String(st.studentId || st.id || idx);
+      const studentKey = getStudentKey(st, idx);
       const finalScore = calculateFinalScore(studentKey);
       const studentScores = scores[studentKey] || {};
 
@@ -451,7 +476,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
       
       if (studentsInRoom.length > 0) {
         const roomData = studentsInRoom.map((st, idx) => {
-          const studentKey = String(st.studentId || st.id || idx);
+          const studentKey = getStudentKey(st, idx);
           const finalScore = calculateFinalScore(studentKey);
           const studentScores = scores[studentKey] || {};
 
@@ -604,11 +629,11 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
                   </tr>
                 ) : (
                   displayedStudents.map((st, idx) => {
-                    const studentKey = String(st.studentId || st.id || idx);
+                    const studentKey = getStudentKey(st, idx);
                     const finalScore = calculateFinalScore(studentKey);
 
                     return (
-                      <tr key={`${studentKey}-${idx}`}>
+                      <tr key={studentKey}>
                         <td>{idx + 1}</td>
                         <td className="col-msv">{st.studentId}</td>
                         <td className="col-name">{st.name}</td>
@@ -629,7 +654,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
                                     key={i}
                                     title={canManage ? `Trừ ${v.penalty} điểm. Click để xóa` : ''}
                                     className="violation-tag"
-                                    onClick={() => canManage && handleToggleViolation(st, day, v.code, v.displayCode, v.penalty)}
+                                    onClick={() => canManage && handleToggleViolation(st, idx, day, v.code, v.displayCode, v.penalty)}
                                     style={{ cursor: canManage ? 'pointer' : 'default' }}
                                   >
                                     {v.displayCode}
@@ -638,7 +663,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
 
                                 {canManage && (
                                   <select
-                                    onChange={(e) => handleSelectChange(st, day, e.target.value, e.target)}
+                                    onChange={(e) => handleSelectChange(st, idx, day, e.target.value, e.target)}
                                     className="violation-select"
                                   >
                                     <option value="">+</option>
@@ -664,7 +689,7 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
                           <input
                             type="text"
                             value={notes[studentKey] || ''}
-                            onChange={(e) => handleNoteChange(st, e.target.value)}
+                            onChange={(e) => handleNoteChange(st, idx, e.target.value)}
                             disabled={!canManage}
                             placeholder="..."
                             className="note-input"
@@ -779,22 +804,26 @@ export const RoomScoring: React.FC<RoomScoringProps> = ({ students = [], current
             </form>
 
             <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '4px', marginBottom: '16px' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+              <style>{`
+                .rules-table th { padding: 8px; background: #f1f5f9; text-align: left; }
+                .rules-table td { padding: 8px; border-bottom: 1px solid #f1f5f9; }
+              `}</style>
+              <table className="rules-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
                 <thead>
-                  <tr style={{ background: '#f1f5f9', textAlign: 'left' }}>
-                    <th style={{ padding: '8px' }}>Mã</th>
-                    <th style={{ padding: '8px' }}>Mô tả</th>
-                    <th style={{ padding: '8px' }}>Điểm trừ</th>
-                    <th style={{ padding: '8px', textAlign: 'center' }}>Thao tác</th>
+                  <tr>
+                    <th>Mã</th>
+                    <th>Mô tả</th>
+                    <th>Điểm trừ</th>
+                    <th style={{ textAlign: 'center' }}>Thao tác</th>
                   </tr>
                 </thead>
                 <tbody>
                   {violations.map((v) => (
-                    <tr key={v.code} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      <td style={{ padding: '8px', fontWeight: 'bold' }}>{v.code}</td>
-                      <td style={{ padding: '8px' }}>{v.label}</td>
-                      <td style={{ padding: '8px', color: '#dc2626' }}>-{v.penalty}đ</td>
-                      <td style={{ padding: '8px', textAlign: 'center' }}>
+                    <tr key={v.code}>
+                      <td style={{ fontWeight: 'bold' }}>{v.code}</td>
+                      <td>{v.label}</td>
+                      <td style={{ color: '#dc2626' }}>-{v.penalty}đ</td>
+                      <td style={{ textAlign: 'center' }}>
                         {!DEFAULT_VIOLATIONS.some(def => def.code === v.code) && (
                           <button onClick={() => handleDeleteRule(v.code)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444' }} title="Xóa lỗi">
                             <Trash2 size={16} />
