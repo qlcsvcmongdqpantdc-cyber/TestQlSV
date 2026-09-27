@@ -269,28 +269,38 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return calculateRoomAllocation();
   }, [calculateRoomAllocation]);
 
+  // Đã khắc phục lỗi trùng lặp bằng cách dùng Map gom duy nhất theo MSSV
   const getRoomsToDisplay = useMemo(() => {
-    if (!isRoomLocked || !lockedRoomsData) {
-      return calculatedRooms;
-    }
-
+    let baseRooms = (!isRoomLocked || !lockedRoomsData) ? calculatedRooms : lockedRoomsData;
     const safeStudents = Array.isArray(students) ? students : [];
 
-    return lockedRoomsData.map(room => ({
-      ...room,
-      students: (room.students || [])
-        .map(lockedStudent => {
-          if (!lockedStudent) return null;
-          const freshStudent = safeStudents.find(s =>
-            s && String(s.MSSV || (s as any).studentId || (s as any).id) === String(lockedStudent.MSSV || (lockedStudent as any).studentId || (lockedStudent as any).id)
-          );
-          if (!freshStudent || freshStudent.isAbsent || freshStudent.Vang === 'x') {
-            return null;
+    return baseRooms.map(room => {
+      const uniqueStudentMap = new Map();
+      
+      (room.students || []).forEach(lockedStudent => {
+        if (!lockedStudent) return;
+        const mssv = String(lockedStudent.MSSV || (lockedStudent as any).studentId || lockedStudent.id);
+        
+        const freshStudent = safeStudents.find(s => 
+          s && String(s.MSSV || (s as any).studentId || (s as any).id) === mssv
+        );
+
+        if (freshStudent) {
+          if (!freshStudent.isAbsent && freshStudent.Vang !== 'x') {
+            uniqueStudentMap.set(mssv, freshStudent);
           }
-          return freshStudent;
-        })
-        .filter(Boolean) as Student[]
-    }));
+        } else {
+          if (!(lockedStudent as any).isAbsent && (lockedStudent as any).Vang !== 'x') {
+            uniqueStudentMap.set(mssv, lockedStudent);
+          }
+        }
+      });
+
+      return {
+        ...room,
+        students: Array.from(uniqueStudentMap.values()) as Student[]
+      };
+    });
   }, [isRoomLocked, lockedRoomsData, calculatedRooms, students]);
 
   const rooms = getRoomsToDisplay;
@@ -351,7 +361,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         Vang: null
       };
 
-      // 1. Thêm mới vào bảng CSDL DanhSachSinhVien
       const { error } = await supabase
         .from('DanhSachSinhVien')
         .insert([studentDataToInsert]);
@@ -366,7 +375,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         setStudents((prev) => [...(Array.isArray(prev) ? prev : []), studentDataToInsert as unknown as Student]);
       }
 
-      // 2. Cập nhật trực tiếp vào danh sách phòng đang hiển thị và khóa cấu hình
       let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
       const roomIndex = updatedLockedRooms.findIndex(r => r.roomNumber === targetRoomForAdd);
 
@@ -385,7 +393,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         });
       }
 
-      // 3. Upsert cấu hình cố định phòng lên bảng RoomConfig
       const { error: configError } = await supabase.from('RoomConfig').upsert({
         id: 1,
         isLocked: true,
