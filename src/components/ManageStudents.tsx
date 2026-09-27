@@ -94,12 +94,13 @@ export function ManageStudents({
     });
   };
 
-  // 🌟 ĐÃ SỬA: Hàm xử lý xóa các dòng trùng MSSV chuẩn xác qua ID hoặc Fallback
+  // 🌟 ĐÃ HOÀN THIỆN: Xóa chính xác theo ID và gọi làm mới giao diện mượt mà
   const handleResolveDuplicates = async () => {
     if (!canManage) return;
     try {
       setIsCleaningDuplicates(true);
-      
+      let hasError = false;
+
       for (const group of duplicateGroups) {
         const deleteSet = selectedToDelete[group.mssv] || new Set();
         
@@ -112,34 +113,37 @@ export function ManageStudents({
               const { error } = await supabase
                 .from('DanhSachSinhVien')
                 .delete()
-                .eq('id', item.id);
+                .eq('id', item.id); // Xóa chính xác tuyệt đối theo ID của Supabase
                 
               if (error) {
+                hasError = true;
                 console.error(`Lỗi xóa bản ghi ID ${item.id}:`, error.message);
               }
             } else {
-              // Fallback trường hợp không có id
-              const { error } = await supabase
-                .from('DanhSachSinhVien')
-                .delete()
-                .eq('MSSV', group.mssv)
-                .eq('HoVaTen', item.name);
-                
-              if (error) {
-                console.error(`Lỗi xóa bản ghi MSSV ${group.mssv}:`, error.message);
-              }
+              console.warn(`Bản ghi MSSV ${group.mssv} thiếu ID, bỏ qua để tránh xóa nhầm.`);
             }
           }
         }
       }
 
-      alert('Đã dọn dẹp các sinh viên trùng MSSV thành công!');
+      if (!hasError) {
+        alert('Đã dọn dẹp các sinh viên trùng MSSV thành công!');
+      } else {
+        alert('Đã hoàn tất nhưng có một vài lỗi xảy ra khi xóa dữ liệu.');
+      }
+
       setShowDuplicateModal(false);
-      if (onRefresh) onRefresh();
-      else window.location.reload();
+
+      // Làm mới dữ liệu ngay lập tức mà không cần reload trang
+      if (typeof onRefresh === 'function') {
+        await onRefresh();
+      } else {
+        window.location.reload();
+      }
+
     } catch (err: any) {
       console.error('Lỗi xử lý trùng lặp:', err);
-      alert('Không thể hoàn tất việc xóa trùng: ' + err.message);
+      alert('Không thể hoàn tất việc xóa trùng: ' + (err.message || err));
     } finally {
       setIsCleaningDuplicates(false);
     }
@@ -294,7 +298,7 @@ export function ManageStudents({
     setDot('');
     setHocKy('');
     setNamHoc('');
-    if (onRefresh) onRefresh();
+    if (typeof onRefresh === 'function') onRefresh();
     else window.location.reload();
   };
 
