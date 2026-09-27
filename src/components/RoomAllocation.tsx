@@ -42,7 +42,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [isSavingRooms, setIsSavingRooms] = useState<boolean>(false);
 
-  // Trạng thái modal thêm sinh viên theo phòng cụ thể
   const [isAddStudentOpen, setIsAddStudentOpen] = useState<boolean>(false);
   const [targetRoomForAdd, setTargetRoomForAdd] = useState<number | null>(null);
   const [newStudentForm, setNewStudentForm] = useState({
@@ -53,7 +52,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   });
   const [isSubmittingAdd, setIsSubmittingAdd] = useState<boolean>(false);
 
-  // Trạng thái thông báo / Toast
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
@@ -66,7 +64,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
   const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(null);
 
-  // Lắng nghe thay đổi dữ liệu thời gian thực từ Supabase an toàn với isMounted
   useEffect(() => {
     let isMounted = true;
 
@@ -151,8 +148,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           const uniqueNames = Array.from(
             new Set(
               data
-                .map((item: any) => item.HoTen)
-                .filter((name: string) => name && name.trim() !== '')
+                .map((item: any) => item?.HoTen)
+                .filter((name: string) => name && typeof name === 'string' && name.trim() !== '')
             )
           ).sort() as string[];
 
@@ -188,8 +185,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
     const sortWithinGender = (group: Student[]) => {
       return group.sort((a, b) => {
-        const nameA = String((a as any).HoVaTen || a.name || '');
-        const nameB = String((b as any).HoVaTen || b.name || '');
+        const nameA = String((a as any)?.HoVaTen || (a as any)?.name || '');
+        const nameB = String((b as any)?.HoVaTen || (b as any)?.name || '');
         return nameA.localeCompare(nameB, 'vi', { sensitivity: 'accent' });
       });
     };
@@ -310,7 +307,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       showToast('Đã xác nhận và lưu sơ đồ phòng lên hệ thống thành công!', 'success');
     } catch (err: any) {
       console.error('Lỗi khi lưu phòng:', err);
-      showToast('Lỗi khi lưu phòng: ' + (err.message || err), 'error');
+      showToast('Lỗi khi lưu phòng: ' + (err?.message || err), 'error');
     } finally {
       setIsSavingRooms(false);
     }
@@ -498,7 +495,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       if (!selectedTeacherFilter) return room;
       const matchedStudents = (room.students || []).filter((st: any) => {
         if (!st) return false;
-        const studentTeacher = st.ThayCo || st.thayCo || st.HoTen || st.hoTen;
+        const studentTeacher = String(st?.ThayCo || st?.thayCo || st?.HoTen || st?.hoTen || '');
         return studentTeacher === selectedTeacherFilter;
       });
       return {
