@@ -16,7 +16,7 @@
     late_at?: number | string | null;
     MSSV?:string;
     Nghi?: string | null; // <--- THÊM DÒNG NÀY VÀO ĐỂ LƯU TRẠNG THÁI NGHỈ  
-    Vang?:string | null;
+    Vang?:string |null;
     Phong?:number | null;
   }
 

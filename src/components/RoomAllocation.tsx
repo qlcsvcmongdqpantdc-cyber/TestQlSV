@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Home, Users, AlertTriangle, Crown, UserCheck, Filter, Lock, Unlock, UserX, AlertCircle, User, UserPlus, CheckCircle, Plus } from 'lucide-react';
+import { Home, Users, AlertTriangle, Crown, UserCheck, Filter, Lock, Unlock, UserX, AlertCircle, UserPlus, CheckCircle, Plus, Edit3, Eye, Settings, Trash2 } from 'lucide-react';
 import type { Student } from '../types/student';
 import type { User as AuthUser } from '../types/auth';
 import { supabase } from '../supabaseClient';
@@ -13,6 +13,31 @@ interface Room {
   matchedStudents?: Student[];
   hasMatch?: boolean;
 }
+
+interface RecordEntry {
+  code: string;
+  displayCode: string;
+  penalty: number;
+}
+
+type ScoringMap = Record<string, Record<number, RecordEntry[]>>;
+
+interface ViolationRule {
+  code: string;
+  displayCode: string;
+  label: string;
+  penalty: number;
+}
+
+const DEFAULT_VIOLATIONS: ViolationRule[] = [
+  { code: 'V', displayCode: 'V', label: '1. Điểm danh: Không phép (V)', penalty: 2 },
+  { code: 'P_DD', displayCode: 'P', label: '1. Điểm danh: Có phép (P)', penalty: 1 },
+  { code: 'K', displayCode: 'K', label: '2. Thể dục: Không phép (K)', penalty: 2 },
+  { code: 'P_TD', displayCode: 'P', label: '2. Thể dục: Có phép (P)', penalty: 1 },
+  { code: 'D', displayCode: 'D', label: '3. Gác đêm: Không phép (D)', penalty: 2 },
+  { code: 'P_GD', displayCode: 'P', label: '3. Gác đêm: Có phép (P)', penalty: 1 },
+  { code: 'N', displayCode: 'N', label: '4. Nội vụ: Không sắp xếp (N)', penalty: 1 },
+];
 
 interface RoomAllocationProps {
   students: Student[];
@@ -35,20 +60,46 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [leaders, setLeaders] = useState<Record<number, string>>({});
   const [activeDropdownRoom, setActiveDropdownRoom] = useState<number | null>(null);
 
+  const [viewMode, setViewMode] = useState<'all' | 'single'>('all'); //[cite: 13]
+  const [selectedRoomNumber, setSelectedRoomNumber] = useState<number>(1);
+
+  const [editingRoomNumber, setEditingRoomNumber] = useState<number | null>(null);
+  const [newTargetRoomValue, setNewTargetRoomValue] = useState<string>('');
+
   const [teacherList, setTeacherList] = useState<string[]>([]);
   const [selectedTeacherFilter, setSelectedTeacherFilter] = useState<string>('');
+  
+  const [searchTerm, setSearchTerm] = useState<string>('');
 
   const [studentToDelete, setStudentToDelete] = useState<Student | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [isSavingRooms, setIsSavingRooms] = useState<boolean>(false);
+  const [isSavingScores, setIsSavingScores] = useState<boolean>(false);
 
-  // Trạng thái modal chọn sinh viên vắng để đưa vào phòng
+  const [scores, setScores] = useState<ScoringMap>({});
+  const [violations, setViolations] = useState<ViolationRule[]>(DEFAULT_VIOLATIONS);
+  const [isViolationModalOpen, setIsViolationModalOpen] = useState<boolean>(false);
+
+  // State cho thêm lỗi tùy chỉnh từ modal quản lý
+  const [newCode, setNewCode] = useState<string>('');
+  const [newLabel, setNewLabel] = useState<string>('');
+  const [newPenalty, setNewPenalty] = useState<number>(1);
+
   const [isAddStudentOpen, setIsAddStudentOpen] = useState<boolean>(false);
   const [targetRoomForAdd, setTargetRoomForAdd] = useState<number | null>(null);
   const [targetRoomGender, setTargetRoomGender] = useState<'Nam' | 'Nữ' | 'Trống'>('Nam');
+  
+  // Option thêm sinh viên: 'absent' (Chọn từ DS vắng) hoặc 'manual' (Nhập thủ công)
+  const [addMethod, setAddMethod] = useState<'absent' | 'manual'>('absent');
   const [selectedAbsentStudentId, setSelectedAbsentStudentId] = useState<string>('');
-  const [isSubmittingAdd, setIsSubmittingAdd] = useState<boolean>(false);
+  
+  // Form state cho nhập thủ công
+  const [manualMssv, setManualMssv] = useState<string>('');
+  const [manualName, setManualName] = useState<string>('');
+  const [manualGender, setManualGender] = useState<'Nam' | 'Nữ'>('Nam');
+  const [manualTeacher, setManualTeacher] = useState<string>('');
 
+  const [isSubmittingAdd, setIsSubmittingAdd] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
@@ -61,7 +112,180 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
   const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(null);
 
-  // Hàm tính toán phân phòng mặc định (chỉ dùng khi chưa khóa phòng)
+  useEffect(() => {
+    const fetchScoringData = async () => {
+      try {
+        const { data: ruleData } = await supabase.from('ViolationRules').select('*');
+        if (ruleData && ruleData.length > 0) {
+          const customRules = ruleData.map((r: any) => ({
+            code: r.Code || r.code,
+            displayCode: r.DisplayCode || r.displayCode || r.Code || r.code,
+            label: r.Label || r.label || `Lỗi: ${r.Code || r.code}`,
+            penalty: Number(r.Penalty ?? r.penalty) || 1,
+          }));
+          const mapRules = new Map();
+          DEFAULT_VIOLATIONS.forEach(v => mapRules.set(v.code, v));
+          customRules.forEach(v => mapRules.set(v.code, v));
+          setViolations(Array.from(mapRules.values()));
+        }
+
+        const { data: scoreData } = await supabase.from('ChamDiem').select('*');
+        if (scoreData && scoreData.length > 0) {
+          const loadedScores: ScoringMap = {};
+          scoreData.forEach((row: any) => {
+            const msv = String(row.MSV || row.msv || '');
+            if (!msv) return;
+            loadedScores[msv] = {};
+            for (let day = 1; day <= 10; day++) {
+              const dayValue = row[String(day)] || row[day];
+              if (dayValue) {
+                const codes = String(dayValue).split(',');
+                const dayEntries: RecordEntry[] = [];
+                codes.forEach((c) => {
+                  const trimmedCode = c.trim();
+                  const target = violations.find((v) => v.code === trimmedCode || v.displayCode === trimmedCode);
+                  if (target) {
+                    dayEntries.push({ code: target.code, displayCode: target.displayCode, penalty: target.penalty });
+                  } else if (trimmedCode) {
+                    dayEntries.push({ code: trimmedCode, displayCode: trimmedCode, penalty: 1 });
+                  }
+                });
+                if (dayEntries.length > 0) loadedScores[msv][day] = dayEntries;
+              }
+            }
+          });
+          setScores(loadedScores);
+        }
+      } catch (err) {
+        console.error('Lỗi tải dữ liệu chấm điểm:', err);
+      }
+    };
+    fetchScoringData();
+  }, [violations]);
+
+  const calculateFinalScore = useCallback((studentKey: string) => {
+    const studentData = scores[studentKey];
+    if (!studentData) return 10;
+    let totalPenalty = 0;
+    Object.values(studentData).forEach((dayData) => {
+      dayData.forEach((item) => { totalPenalty += item.penalty; });
+    });
+    return Math.max(0, 10 - totalPenalty);
+  }, [scores]);
+
+  const handleToggleViolation = async (studentKey: string, day: number, code: string, displayCode: string, penalty: number) => {
+    if (!currentUser || (currentUser.role !== 'admin' && currentUser.can_manage !== true)) {
+      showToast('Bạn không có quyền thay đổi điểm nề nếp!', 'error');
+      return;
+    }
+
+    setScores((prev) => {
+      const studentData = prev[studentKey] || {};
+      const dayData = studentData[day] || [];
+      const exists = dayData.some((item) => item.code === code);
+      const updatedDayData = exists ? dayData.filter((item) => item.code !== code) : [...dayData, { code, displayCode, penalty }];
+      return { ...prev, [studentKey]: { ...studentData, [day]: updatedDayData } };
+    });
+  };
+
+  const handleSelectChange = async (studentKey: string, day: number, selectedValue: string, eventTarget: HTMLSelectElement) => {
+    if (!selectedValue) return;
+
+    if (selectedValue === 'MANAGE_RULES') {
+      setIsViolationModalOpen(true);
+    } else if (selectedValue === 'ADD_CUSTOM') {
+      const codeInput = prompt('Nhập mã/ký tự lỗi tự chọn (VD: OT, VSTH...):');
+      if (!codeInput || !codeInput.trim()) {
+        eventTarget.value = '';
+        return;
+      }
+      const penaltyInput = prompt(`Nhập số điểm trừ cho lỗi [${codeInput.trim().toUpperCase()}]:`, '1');
+      const penalty = parseFloat(penaltyInput || '1');
+      if (isNaN(penalty) || penalty <= 0) {
+        showToast('Số điểm trừ không hợp lệ!', 'error');
+        eventTarget.value = '';
+        return;
+      }
+
+      const formattedCode = codeInput.trim().toUpperCase();
+      const newRule = {
+        code: formattedCode,
+        displayCode: formattedCode,
+        label: `Tự chọn: ${formattedCode}`,
+        penalty: penalty,
+      };
+
+      try {
+        await supabase.from('ViolationRules').upsert({
+          Code: newRule.code,
+          DisplayCode: newRule.displayCode,
+          Label: newRule.label,
+          Penalty: newRule.penalty,
+        }, { onConflict: 'Code' });
+      } catch (err) {
+        console.error(err);
+      }
+
+      if (!violations.some((v) => v.code === newRule.code)) {
+        setViolations((prev) => [...prev, newRule]);
+      }
+
+      await handleToggleViolation(studentKey, day, newRule.code, newRule.displayCode, newRule.penalty);
+    } else {
+      const target = violations.find((v) => v.code === selectedValue);
+      if (target) {
+        await handleToggleViolation(studentKey, day, target.code, target.displayCode, target.penalty);
+      }
+    }
+    eventTarget.value = '';
+  };
+
+  const handleAddRuleFromModal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCode.trim()) return;
+    const formattedCode = newCode.trim().toUpperCase();
+    const rule = {
+      code: formattedCode,
+      displayCode: formattedCode,
+      label: newLabel.trim() || `Lỗi: ${formattedCode}`,
+      penalty: Number(newPenalty) || 1,
+    };
+
+    const { error } = await supabase.from('ViolationRules').upsert({
+      Code: rule.code,
+      DisplayCode: rule.displayCode,
+      Label: rule.label,
+      Penalty: rule.penalty,
+    }, { onConflict: 'Code' });
+
+    if (error) {
+      showToast('Lỗi khi lưu danh mục lên cơ sở dữ liệu!', 'error');
+      return;
+    }
+
+    setViolations((prev) => {
+      const filtered = prev.filter(v => v.code !== rule.code);
+      return [...filtered, rule];
+    });
+
+    setNewCode('');
+    setNewLabel('');
+    setNewPenalty(1);
+    showToast('Thêm / Cập nhật quy định lỗi thành công!', 'success');
+  };
+
+  const handleDeleteRule = async (codeToDelete: string) => {
+    if (DEFAULT_VIOLATIONS.some(v => v.code === codeToDelete)) {
+      showToast('Không thể xóa các lỗi mặc định hệ thống!', 'error');
+      return;
+    }
+    if (confirm(`Bạn có chắc chắn muốn xóa quy định lỗi [${codeToDelete}] không?`)) {
+      await supabase.from('ViolationRules').delete().eq('Code', codeToDelete);
+      setViolations(prev => prev.filter(v => v.code !== codeToDelete));
+      showToast('Đã xóa quy định lỗi!', 'success');
+    }
+  };
+
   const calculateRoomAllocation = useCallback((): Room[] => {
     const safeStudents = Array.isArray(students) ? students : [];
     const allValidStudents = safeStudents.filter((s: any) => {
@@ -154,7 +378,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return rooms;
   }, [students, MAX_PER_ROOM, INITIAL_ROOMS]);
 
-  // Quản lý Realtime và unmount an toàn tránh trắng trang
   useEffect(() => {
     let isMounted = true;
     let channel: any = null;
@@ -270,7 +493,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       : true;
   }, [currentUser]);
 
-  // Lọc ra danh sách các sinh viên hiện đang vắng mặt (có thể chọn để đưa lại vào phòng)
   const absentStudentsList = useMemo(() => {
     const safeStudents = Array.isArray(students) ? students : [];
     return safeStudents.filter((s: any) => {
@@ -279,7 +501,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     });
   }, [students]);
 
-  // Hiển thị phòng dựa theo trạng thái khóa hoặc tạm tính nếu chưa khóa
   const getRoomsToDisplay = useMemo(() => {
     let baseRooms = (!isRoomLocked || !lockedRoomsData) ? calculateRoomAllocation() : lockedRoomsData;
     const safeStudents = Array.isArray(students) ? students : [];
@@ -315,34 +536,118 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const rooms = getRoomsToDisplay;
 
+  const handleUpdateSingleRoomNumber = async (oldRoomNum: number) => {
+    if (!canManage) return;
+    const newRoomNum = parseInt(newTargetRoomValue, 10);
+
+    if (isNaN(newRoomNum) || newRoomNum <= 0) {
+      showToast('Vui lòng nhập số phòng hợp lệ lớn hơn 0!', 'error');
+      return;
+    }
+
+    if (oldRoomNum === newRoomNum) {
+      setEditingRoomNumber(null);
+      return;
+    }
+
+    try {
+      const targetRoomObj = rooms.find(r => r.roomNumber === oldRoomNum);
+      if (!targetRoomObj || !targetRoomObj.students || targetRoomObj.students.length === 0) {
+        showToast('Phòng này đang trống, không có sinh viên để đổi số phòng!', 'error');
+        setEditingRoomNumber(null);
+        return;
+      }
+
+      for (const st of targetRoomObj.students) {
+        const mssvValue = st?.MSSV || (st as any).studentId || st.id;
+        const hoVaTen = st?.name || (st as any).name || '';
+        if (mssvValue) {
+          await supabase
+            .from('DanhSachSinhVien')
+            .update({ Phong: newRoomNum })
+            .eq('MSSV', mssvValue);
+
+          await supabase
+            .from('ChamDiem')
+            .upsert({
+              MSV: mssvValue,
+              HoVaTen: hoVaTen,
+              Phong: newRoomNum
+            }, { onConflict: 'MSV' });
+        }
+      }
+
+      let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
+      
+      updatedLockedRooms = updatedLockedRooms.map(r => {
+        if (r.roomNumber === oldRoomNum) {
+          return { ...r, roomNumber: newRoomNum };
+        }
+        return r;
+      });
+
+      setLockedRoomsData(updatedLockedRooms);
+      setIsRoomLocked(true);
+
+      await supabase.from('RoomConfig').upsert({
+        id: 1,
+        isLocked: true,
+        locked_data: updatedLockedRooms
+      });
+
+      showToast(`Đã chuyển toàn bộ sinh viên từ Phòng ${oldRoomNum} sang Phòng ${newRoomNum} thành công!`, 'success');
+      setEditingRoomNumber(null);
+      setNewTargetRoomValue('');
+    } catch (err: any) {
+      console.error('Lỗi khi đổi số phòng:', err);
+      showToast('Lỗi khi đổi số phòng: ' + (err?.message || err), 'error');
+    }
+  };
+
   const handleConfirmAndSaveRooms = async () => {
     if (!canManage) return;
     setIsSavingRooms(true);
 
     try {
       const currentRoomsToSave = rooms; 
-      const updates: { mssv: any; roomNumber: number }[] = [];
 
-      currentRoomsToSave.forEach((room) => {
-        (room.students || []).forEach((st: any) => {
-          const mssvValue = st?.MSSV || st?.studentId || st?.id;
+      for (const room of currentRoomsToSave) {
+        for (const st of (room.students || [])) {
+          const mssvValue = st?.MSSV || (st as any).studentId || st.id;
+          const hoVaTen = st?.name || (st as any).name || '';
           if (mssvValue) {
-            updates.push({
-              mssv: mssvValue,
-              roomNumber: room.roomNumber
-            });
+            await supabase
+              .from('DanhSachSinhVien')
+              .update({ Phong: room.roomNumber, Vang: null })
+              .eq('MSSV', mssvValue);
+
+            await supabase
+              .from('ChamDiem')
+              .upsert({
+                MSV: mssvValue,
+                HoVaTen: hoVaTen,
+                Phong: room.roomNumber
+              }, { onConflict: 'MSV' });
           }
-        });
-      });
+        }
+      }
 
-      for (const item of updates) {
-        const { error } = await supabase
-          .from('DanhSachSinhVien')
-          .update({ Phong: item.roomNumber })
-          .eq('MSSV', item.mssv);
+      for (const st of absentStudentsList) {
+        const mssvValue = (st as any).MSSV || (st as any).studentId || (st as any).id;
+        const hoVaTen = (st as any).HoVaTen || (st as any).name || '';
+        if (mssvValue) {
+          await supabase
+            .from('DanhSachSinhVien')
+            .update({ Phong: null, Vang: 'x' })
+            .eq('MSSV', mssvValue);
 
-        if (error) {
-          console.error(`Lỗi cập nhật phòng cho MSSV ${item.mssv}:`, error.message);
+          await supabase
+            .from('ChamDiem')
+            .upsert({
+              MSV: mssvValue,
+              HoVaTen: hoVaTen,
+              Phong: null
+            }, { onConflict: 'MSV' });
         }
       }
 
@@ -359,7 +664,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         throw new Error(configError.message);
       }
 
-      showToast('Đã lưu cố định sơ đồ phòng hiện tại thành công!', 'success');
+      showToast('Đã lưu cố định sơ đồ phòng và đồng bộ số phòng lên CSDL thành công!', 'success');
     } catch (err: any) {
       console.error('Lỗi khi lưu phòng:', err);
       showToast('Lỗi khi lưu phòng: ' + (err?.message || err), 'error');
@@ -368,80 +673,220 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     }
   };
 
+  const handleSaveScoresToDatabase = async () => {
+    if (!currentUser || (currentUser.role !== 'admin' && currentUser.can_manage !== true)) {
+      showToast('Bạn không có quyền lưu điểm!', 'error');
+      return;
+    }
+
+    setIsSavingScores(true);
+    try {
+      const allStudentsList = [
+        ...rooms.flatMap(r => r.students || []),
+        ...absentStudentsList
+      ];
+
+      for (const st of allStudentsList) {
+        if (!st) continue;
+        const mssv = String(st.MSSV || (st as any).studentId || st.id);
+        const hoVaTen = st.name || (st as any).name || '';
+        const finalScore = calculateFinalScore(mssv);
+        
+        let roomNum: number | null = null;
+        for (const r of rooms) {
+          if ((r.students || []).some((s: any) => String(s.MSSV || s.studentId || s.id) === mssv)) {
+            roomNum = r.roomNumber;
+            break;
+          }
+        }
+
+        const dayDataRecord: Record<string, string> = {};
+        for (let day = 1; day <= 10; day++) {
+          const entries = scores[mssv]?.[day] || [];
+          if (entries.length > 0) {
+            dayDataRecord[String(day)] = entries.map(e => e.code).join(', ');
+          } else {
+            dayDataRecord[String(day)] = '';
+          }
+        }
+
+        const rowPayload = {
+          MSV: mssv,
+          HoVaTen: hoVaTen,
+          DiemNeNep: finalScore,
+          Phong: roomNum,
+          ...dayDataRecord
+        };
+
+        await supabase
+          .from('ChamDiem')
+          .upsert(rowPayload, { onConflict: 'MSV' });
+      }
+
+      showToast('Xác nhận nhập điểm và đẩy lên database thành công!', 'success');
+    } catch (err: any) {
+      console.error('Lỗi khi lưu điểm:', err);
+      showToast('Lỗi khi lưu điểm: ' + (err?.message || err), 'error');
+    } finally {
+      setIsSavingScores(false);
+    }
+  };
+
   const openAddStudentModalForRoom = (roomNum: number, roomGender: 'Nữ' | 'Nam' | 'Trống') => {
     setTargetRoomForAdd(roomNum);
     setTargetRoomGender(roomGender);
     setSelectedAbsentStudentId('');
+    setAddMethod('absent');
+    setManualMssv('');
+    setManualName('');
+    setManualGender(roomGender === 'Nữ' ? 'Nữ' : 'Nam');
+    setManualTeacher('');
     setIsAddStudentOpen(true);
   };
 
-  // Logic chọn sinh viên vắng và đưa vào phòng (cập nhật Vang = null / false và Phong = roomNumber)
-  const handleAssignAbsentStudentToRoom = async (e: React.FormEvent) => {
+  const handleAddStudentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canManage || targetRoomForAdd === null || !selectedAbsentStudentId) return;
-
-    const studentToRestore = absentStudentsList.find((s: any) => {
-      const sKey = String(s.MSSV || s.studentId || s.id);
-      return sKey === selectedAbsentStudentId;
-    });
-
-    if (!studentToRestore) {
-      showToast('Không tìm thấy sinh viên được chọn!', 'error');
-      return;
-    }
-
-    // Kiểm tra giới tính nếu phòng đã có người
-    const studentGender = String((studentToRestore as any).GioiTinh || (studentToRestore as any).gender || '').trim().toLowerCase();
-    if (targetRoomGender !== 'Trống') {
-      const isFemaleRoom = targetRoomGender === 'Nữ';
-      const isStudentFemale = studentGender === 'nữ' || studentGender === 'nu';
-      if (isFemaleRoom !== isStudentFemale) {
-        showToast(`Không thể xếp sinh viên này vào phòng ${targetRoomGender} do lệch giới tính!`, 'error');
-        return;
-      }
-    }
+    if (!canManage || targetRoomForAdd === null) return;
 
     setIsSubmittingAdd(true);
 
     try {
-      const mssvValue = (studentToRestore as any).MSSV || (studentToRestore as any).studentId || studentToRestore.id;
+      let updatedStudentObj: any = null;
+      let mssvValue = '';
+      let hoVaTen = '';
+      let studentGender = '';
 
-      const { error } = await supabase
-        .from('DanhSachSinhVien')
-        .update({ Vang: null, Phong: targetRoomForAdd })
-        .eq('MSSV', mssvValue);
+      if (addMethod === 'absent') {
+        if (!selectedAbsentStudentId) {
+          showToast('Vui lòng chọn sinh viên vắng mặt!', 'error');
+          setIsSubmittingAdd(false);
+          return;
+        }
 
-      if (error) {
-        showToast('Lỗi khi cập nhật sinh viên: ' + error.message, 'error');
-        setIsSubmittingAdd(false);
-        return;
-      }
+        const studentToRestore = absentStudentsList.find((s: any) => {
+          const sKey = String(s.MSSV || s.studentId || s.id);
+          return sKey === selectedAbsentStudentId;
+        });
 
-      const updatedStudentObj = {
-        ...studentToRestore,
-        Vang: null,
-        isAbsent: false,
-        Phong: targetRoomForAdd
-      };
+        if (!studentToRestore) {
+          showToast('Không tìm thấy sinh viên được chọn!', 'error');
+          setIsSubmittingAdd(false);
+          return;
+        }
 
-      if (setStudents) {
-        setStudents((prev) =>
-          (Array.isArray(prev) ? prev : []).map((s) => {
-            if (!s) return s;
-            const sKey = String(s.MSSV || (s as any).studentId || s.id);
-            if (sKey === selectedAbsentStudentId) {
-              return updatedStudentObj as unknown as Student;
-            }
-            return s;
-          })
-        );
+        studentGender = String((studentToRestore as any).GioiTinh || (studentToRestore as any).gender || '').trim().toLowerCase();
+        if (targetRoomGender !== 'Trống') {
+          const isFemaleRoom = targetRoomGender === 'Nữ';
+          const isStudentFemale = studentGender === 'nữ' || studentGender === 'nu';
+          if (isFemaleRoom !== isStudentFemale) {
+            showToast(`Không thể xếp sinh viên này vào phòng ${targetRoomGender} do lệch giới tính!`, 'error');
+            setIsSubmittingAdd(false);
+            return;
+          }
+        }
+
+        mssvValue = (studentToRestore as any).MSSV || (studentToRestore as any).studentId || studentToRestore.id;
+        hoVaTen = (studentToRestore as any).HoVaTen || (studentToRestore as any).name || '';
+
+        await supabase
+          .from('DanhSachSinhVien')
+          .update({ Vang: null, Phong: targetRoomForAdd })
+          .eq('MSSV', mssvValue);
+
+        await supabase
+          .from('ChamDiem')
+          .upsert({
+            MSV: mssvValue,
+            HoVaTen: hoVaTen,
+            Phong: targetRoomForAdd
+          }, { onConflict: 'MSV' });
+
+        updatedStudentObj = {
+          ...studentToRestore,
+          Vang: null,
+          isAbsent: false,
+          Phong: targetRoomForAdd
+        };
+
+        if (setStudents) {
+          setStudents((prev) =>
+            (Array.isArray(prev) ? prev : []).map((s) => {
+              if (!s) return s;
+              const sKey = String(s.MSSV || (s as any).studentId || s.id);
+              if (sKey === selectedAbsentStudentId) {
+                return updatedStudentObj as unknown as Student;
+              }
+              return s;
+            })
+          );
+        }
+      } else {
+        // Chế độ nhập thủ công
+        if (!manualMssv.trim() || !manualName.trim()) {
+          showToast('Vui lòng nhập đầy đủ MSSV và Họ tên!', 'error');
+          setIsSubmittingAdd(false);
+          return;
+        }
+
+        mssvValue = manualMssv.trim();
+        hoVaTen = manualName.trim();
+        studentGender = manualGender;
+        const teacherVal = manualTeacher.trim() || 'Chưa phân công';
+
+        if (targetRoomGender !== 'Trống') {
+          if (targetRoomGender !== manualGender) {
+            showToast(`Giới tính sinh viên (${manualGender}) không khớp với loại phòng (${targetRoomGender})!`, 'error');
+            setIsSubmittingAdd(false);
+            return;
+          }
+        }
+
+        const newStudentPayload = {
+          MSSV: mssvValue,
+          HoVaTen: hoVaTen,
+          GioiTinh: manualGender,
+          ThayCo: teacherVal,
+          Phong: targetRoomForAdd,
+          Vang: null
+        };
+
+        const { error: insertError } = await supabase
+          .from('DanhSachSinhVien')
+          .upsert(newStudentPayload, { onConflict: 'MSSV' });
+
+        if (insertError) {
+          showToast('Lỗi khi thêm sinh viên vào CSDL: ' + insertError.message, 'error');
+          setIsSubmittingAdd(false);
+          return;
+        }
+
+        await supabase
+          .from('ChamDiem')
+          .upsert({
+            MSV: mssvValue,
+            HoVaTen: hoVaTen,
+            Phong: targetRoomForAdd
+          }, { onConflict: 'MSV' });
+
+        updatedStudentObj = {
+          MSSV: mssvValue,
+          HoVaTen: hoVaTen,
+          GioiTinh: manualGender,
+          ThayCo: teacherVal,
+          Phong: targetRoomForAdd,
+          Vang: null
+        };
+
+        if (setStudents) {
+          setStudents((prev) => [...(Array.isArray(prev) ? prev : []), updatedStudentObj as unknown as Student]);
+        }
       }
 
       let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
       const roomIndex = updatedLockedRooms.findIndex(r => r.roomNumber === targetRoomForAdd);
 
       const resolvedGender = targetRoomGender === 'Trống' 
-        ? ((studentGender === 'nữ' || studentGender === 'nu') ? 'Nữ' : 'Nam')
+        ? ((studentGender.toLowerCase().includes('nữ') || studentGender.toLowerCase().includes('nu')) ? 'Nữ' : 'Nam')
         : targetRoomGender;
 
       if (roomIndex >= 0) {
@@ -459,23 +904,16 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         });
       }
 
-      const { error: configError } = await supabase.from('RoomConfig').upsert({
+      await supabase.from('RoomConfig').upsert({
         id: 1,
         isLocked: true,
         locked_data: updatedLockedRooms
       });
 
-      if (configError) {
-        showToast('Lỗi cập nhật cấu hình phòng: ' + configError.message, 'error');
-        setIsSubmittingAdd(false);
-        return;
-      }
-
       setLockedRoomsData(updatedLockedRooms);
       setIsRoomLocked(true);
 
-      showToast(`Đã đưa sinh viên ${(studentToRestore as any).HoVaTen || (studentToRestore as any).name} vào Phòng ${targetRoomForAdd} thành công!`, 'success');
-      
+      showToast(`Đã đưa sinh viên vào Phòng ${targetRoomForAdd} thành công!`, 'success');
       setIsAddStudentOpen(false);
       setTargetRoomForAdd(null);
       setSelectedAbsentStudentId('');
@@ -494,17 +932,20 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
     try {
       const mssvValue = studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id;
+      const hoVaTen = (studentToDelete as any).HoVaTen || (studentToDelete as any).name || '';
 
-      const { error } = await supabase
+      await supabase
         .from('DanhSachSinhVien')
         .update({ Vang: 'x', Phong: null })
         .eq('MSSV', mssvValue);
 
-      if (error) {
-        showToast('Lỗi cập nhật CSDL: ' + error.message, 'error');
-        setIsDeleting(false);
-        return;
-      }
+      await supabase
+        .from('ChamDiem')
+        .upsert({
+          MSV: mssvValue,
+          HoVaTen: hoVaTen,
+          Phong: null
+        }, { onConflict: 'MSV' });
 
       let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
       
@@ -538,7 +979,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         );
       }
 
-      showToast(`Đã đánh dấu vắng và xóa sinh viên khỏi phòng thành công.`, 'success');
+      showToast(`Đã đánh dấu vắng và xóa sinh viên khỏi phòng.`, 'success');
     } catch (err) {
       showToast('Lỗi kết nối mạng.', 'error');
     } finally {
@@ -583,20 +1024,40 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   };
 
   const filteredRooms = useMemo(() => {
-    return rooms.map((room) => {
-      if (!selectedTeacherFilter) return room;
+    const query = searchTerm.trim().toLowerCase();
+
+    let baseRooms = rooms;
+    if (viewMode === 'single') {
+      baseRooms = rooms.filter(r => r.roomNumber === selectedRoomNumber);
+    }
+
+    return baseRooms.map((room) => {
       const matchedStudents = (room.students || []).filter((st: any) => {
         if (!st) return false;
         const studentTeacher = String(st?.ThayCo || st?.thayCo || st?.HoTen || st?.hoTen || '');
-        return studentTeacher === selectedTeacherFilter;
+        const teacherMatch = !selectedTeacherFilter || studentTeacher === selectedTeacherFilter;
+
+        if (!query) return teacherMatch;
+
+        const name = String(st?.HoVaTen || st?.name || '').toLowerCase();
+        const mssv = String(st?.MSSV || st?.studentId || st?.id || '').toLowerCase();
+        const searchMatch = name.includes(query) || mssv.includes(query);
+
+        return teacherMatch && searchMatch;
       });
+
+      const hasMatch = (selectedTeacherFilter || query) ? matchedStudents.length > 0 : true;
+
       return {
         ...room,
         matchedStudents,
-        hasMatch: matchedStudents.length > 0
+        hasMatch
       };
-    }).filter((room) => !selectedTeacherFilter || room.hasMatch);
-  }, [rooms, selectedTeacherFilter]);
+    }).filter((room) => {
+      if (!selectedTeacherFilter && !searchTerm) return true;
+      return room.hasMatch;
+    });
+  }, [rooms, selectedTeacherFilter, searchTerm, viewMode, selectedRoomNumber]);
 
   useEffect(() => {
     if (!onUpdateRoomData || isRoomLocked) return;
@@ -670,40 +1131,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return safeStudents.filter((s: any) => s && (s.isAbsent || s.Vang === 'x')).length;
   }, [students]);
 
-  const { totalFemale, totalMale } = useMemo(() => {
-    const safeStudents = Array.isArray(students) ? students : [];
-    const validStudents = safeStudents.filter((s: any) => s && !s.isAbsent && s.Vang !== 'x');
-    const femaleCount = validStudents.filter((s: any) => {
-      const g = String(s?.GioiTinh || s?.gender || '').trim().toLowerCase();
-      return g === 'nữ' || g === 'nu';
-    }).length;
-    const maleCount = validStudents.filter((s: any) => {
-      const g = String(s?.GioiTinh || s?.gender || '').trim().toLowerCase();
-      return g === 'nam';
-    }).length;
-    return { totalFemale: femaleCount, totalMale: maleCount };
-  }, [students]);
-
   return (
-    <div className="room-container" style={{ position: 'relative' }}>
+    <div className="room-container modern-ui" style={{ position: 'relative' }}>
       {toastMessage && (
-        <div style={{
-          position: 'fixed',
-          top: '20px',
-          right: '20px',
-          zIndex: 9999,
-          background: toastMessage.type === 'success' ? '#f0fdf4' : '#fef2f2',
-          border: `1px solid ${toastMessage.type === 'success' ? '#86efac' : '#fca5a5'}`,
-          color: toastMessage.type === 'success' ? '#166534' : '#991b1b',
-          padding: '12px 18px',
-          borderRadius: '8px',
-          boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          fontSize: '14px',
-          fontWeight: 600,
-        }}>
+        <div className={`toast-notification ${toastMessage.type}`}>
           {toastMessage.type === 'success' ? <CheckCircle size={18} color="#16a34a" /> : <AlertCircle size={18} color="#dc2626" />}
           <span>{toastMessage.text}</span>
         </div>
@@ -711,41 +1142,35 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
       <div className="room-header">
         <div>
-          <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            Sơ Đồ Phòng KTX QPAN ({filteredRooms.length}/{rooms.length} Phòng)
+          <h2>
+            Phân phòng & Chấm điểm nề nếp KTX 
+            <span className="room-count-badge">({rooms.length} Phòng)</span>
             {isRoomLocked && (
-              <span style={{ fontSize: '12px', background: '#fee2e2', color: '#dc2626', padding: '2px 8px', borderRadius: '4px', border: '1px solid #f87171' }}>
-                🔒 Đã khóa sơ đồ (Giữ cố định vị trí phòng)
+              <span className="locked-tag">
+                🔒 Đã khóa sơ đồ
               </span>
             )}
           </h2>
-          <p>
-            {isRoomLocked
-              ? 'Phòng đã được khóa cố định. Bấm "Xác Nhận Phòng" để lưu lại cấu hình hiện tại.'
-              : 'Đang hiển thị chế độ xem trước. Bấm "Xác Nhận Phòng" để lưu sơ đồ vào hệ thống.'}
-          </p>
+          <p>Quản lý phân phòng sinh viên và chấm điểm nề nếp trong cùng một giao diện trực quan.</p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+        <div className="header-actions-wrapper">
           {canManage && (
             <>
               <button
                 type="button"
+                onClick={() => setIsViolationModalOpen(true)}
+                className="btn-action-secondary"
+                style={{ backgroundColor: '#4f46e5', color: '#fff', border: 'none' }}
+              >
+                <Settings size={16} /> Quản lý danh mục lỗi
+              </button>
+
+              <button
+                type="button"
                 onClick={handleConfirmAndSaveRooms}
                 disabled={isSavingRooms}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 14px',
-                  borderRadius: '8px',
-                  fontWeight: 600,
-                  fontSize: '14px',
-                  cursor: 'pointer',
-                  border: '1px solid #16a34a',
-                  background: '#f0fdf4',
-                  color: '#16a34a',
-                }}
+                className="btn-action-primary"
               >
                 <CheckCircle size={16} />
                 {isSavingRooms ? 'Đang lưu...' : 'Xác Nhận Phòng'}
@@ -753,81 +1178,115 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
               <button
                 type="button"
+                onClick={handleSaveScoresToDatabase}
+                disabled={isSavingScores}
+                className="btn-action-primary"
+                style={{ backgroundColor: '#16a34a' }}
+              >
+                <CheckCircle size={16} />
+                {isSavingScores ? 'Đang đẩy điểm...' : 'Xác Nhận Nhập Điểm'}
+              </button>
+
+              <button
+                type="button"
                 onClick={toggleLockRooms}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 14px',
-                  borderRadius: '8px',
-                  fontWeight: 600,
-                  fontSize: '14px',
-                  cursor: 'pointer',
-                  border: isRoomLocked ? '1px solid #dc2626' : '1px solid #2563eb',
-                  background: isRoomLocked ? '#fef2f2' : '#eff6ff',
-                  color: isRoomLocked ? '#dc2626' : '#2563eb',
-                }}
+                className={`btn-action-secondary ${isRoomLocked ? 'is-locked' : ''}`}
               >
                 {isRoomLocked ? <Lock size={16} /> : <Unlock size={16} />}
-                {isRoomLocked ? 'Mở Khóa Phòng' : 'Khóa Cố Định Phòng'}
+                {isRoomLocked ? 'Mở Khóa' : 'Khóa Cố Định'}
               </button>
             </>
           )}
 
           <div className="room-stats">
             <div className="stat-card">
-              <Users size={18} color="#2563eb" />
-              <span>Đang ở: <strong>{totalActiveAllocated}</strong> SV</span>
+              <Users size={16} color="#2563eb" />
+              <span>Tổng SV: <strong>{totalActiveAllocated} SV</strong></span>
             </div>
-            <div className="stat-card" style={{ background: '#fdf2f8', borderColor: '#fbcfe8', color: '#db2777' }}>
-              <User size={18} color="#db2777" />
-              <span>Tổng Nữ: <strong>{totalFemale}</strong></span>
-            </div>
-            <div className="stat-card" style={{ background: '#eff6ff', borderColor: '#bfdbfe', color: '#2563eb' }}>
-              <UserPlus size={18} color="#2563eb" />
-              <span>Tổng Nam: <strong>{totalMale}</strong></span>
+            <div className="stat-card">
+              <Home size={16} color="#475569" />
+              <span>Phòng: <strong>{rooms.length}</strong></span>
             </div>
             <div className="stat-card warning">
-              <AlertTriangle size={18} color="#dc2626" />
-              <span>Vắng: <strong>{totalAbsent}</strong> SV</span>
+              <AlertTriangle size={16} color="#dc2626" />
+              <span>Vắng: <strong>{totalAbsent} SV</strong></span>
             </div>
           </div>
         </div>
       </div>
 
-      <div style={{
-        background: '#f8fafc',
-        padding: '12px 18px',
-        borderRadius: '8px',
-        border: '1px solid #cbd5e1',
-        marginBottom: '20px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '12px',
-        flexWrap: 'wrap'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#334155', fontWeight: 600, fontSize: '14px' }}>
-          <Filter size={18} color="#2563eb" />
-          <span>Lọc theo HoTen (Bảng User):</span>
+      <div className="view-mode-switcher-bar" style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', background: '#f8fafc', padding: '10px 14px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+        <span style={{ fontWeight: 600, fontSize: '14px', color: '#334155' }}>Chế độ hiển thị:</span>
+        <button
+          type="button"
+          onClick={() => setViewMode('all')}
+          style={{
+            padding: '6px 14px',
+            borderRadius: '6px',
+            border: 'none',
+            fontWeight: 600,
+            cursor: 'pointer',
+            background: viewMode === 'all' ? '#2563eb' : '#e2e8f0',
+            color: viewMode === 'all' ? '#fff' : '#475569',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px'
+          }}
+        >
+          <Home size={15} />
+          Tất cả phòng (Không có bảng điểm)
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setViewMode('single')}
+          style={{
+            padding: '6px 14px',
+            borderRadius: '6px',
+            border: 'none',
+            fontWeight: 600,
+            cursor: 'pointer',
+            background: viewMode === 'single' ? '#2563eb' : '#e2e8f0',
+            color: viewMode === 'single' ? '#fff' : '#475569',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px'
+          }}
+        >
+          <Eye size={15} />
+          Chọn từng phòng (Có bảng điểm chi tiết)
+        </button>
+
+        {viewMode === 'single' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
+            <span style={{ fontSize: '13px', fontWeight: 500 }}>Chọn phòng:</span>
+            <select
+              value={selectedRoomNumber}
+              onChange={(e) => setSelectedRoomNumber(Number(e.target.value))}
+              style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontWeight: 600 }}
+            >
+              {rooms.map(r => (
+                <option key={r.roomNumber} value={r.roomNumber}>
+                  Phòng {r.roomNumber} ({r.students.length} SV)
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
+      <div className="filter-bar-container" style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+        <div className="filter-label">
+          <Filter size={16} color="#2563eb" />
+          <span>Lọc theo HoTen:</span>
         </div>
 
         <select
           value={selectedTeacherFilter}
           onChange={(e) => setSelectedTeacherFilter(e.target.value)}
-          style={{
-            padding: '8px 12px',
-            borderRadius: '6px',
-            border: '1px solid #94a3b8',
-            outline: 'none',
-            fontSize: '14px',
-            background: '#ffffff',
-            minWidth: '240px',
-            cursor: 'pointer',
-            color: '#1e293b',
-            fontWeight: 500
-          }}
+          className="filter-select"
         >
-          <option value="">-- Tất cả HoTen (Hiện toàn bộ phòng) --</option>
+          <option value="">-- Tất cả HoTen --</option>
           {teacherList.map((hoTen) => (
             <option key={hoTen} value={hoTen}>
               {hoTen}
@@ -839,26 +1298,39 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           <button
             type="button"
             onClick={() => setSelectedTeacherFilter('')}
-            style={{
-              padding: '8px 12px',
-              borderRadius: '6px',
-              border: '1px solid #ef4444',
-              background: '#fef2f2',
-              color: '#dc2626',
-              fontSize: '13px',
-              fontWeight: 600,
-              cursor: 'pointer'
-            }}
+            className="btn-clear-filter"
           >
-            ✕ Bỏ lọc
+            ✕ Bỏ lọc GV
+          </button>
+        )}
+
+        <div className="filter-label" style={{ marginLeft: '12px' }}>
+          <span>Tìm kiếm (Tên/MSSV):</span>
+        </div>
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Nhập tên hoặc MSSV..."
+          className="filter-select"
+          style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', minWidth: '200px' }}
+        />
+
+        {searchTerm && (
+          <button
+            type="button"
+            onClick={() => setSearchTerm('')}
+            className="btn-clear-filter"
+          >
+            ✕ Xóa tìm kiếm
           </button>
         )}
       </div>
 
       <div className="rooms-grid">
         {filteredRooms.length === 0 ? (
-          <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px', color: '#64748b', background: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-            Không tìm thấy phòng nào khớp với HoTen: <strong>{selectedTeacherFilter}</strong>.
+          <div className="no-rooms-found">
+            Không tìm thấy phòng nào khớp với điều kiện lọc/tìm kiếm của bạn.
           </div>
         ) : (
           filteredRooms.map((room) => {
@@ -867,23 +1339,67 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             const isEmpty = activeRoomStudents.length === 0;
             const currentLeaderKey = leaders[room.roomNumber];
             const isDropdownOpen = activeDropdownRoom === room.roomNumber;
+            const isEditingThisRoom = editingRoomNumber === room.roomNumber;
 
             return (
               <div
                 key={room.roomNumber}
                 className={`room-card ${isEmpty ? 'empty' : ''}`}
-                style={{ position: 'relative' }}
               >
                 <div className="room-card-header">
                   <div className="room-title">
-                    <Home size={18} />
-                    <span>Phòng {room.roomNumber < 10 ? `0${room.roomNumber}` : room.roomNumber}</span>
+                    <div className="room-icon-wrapper">
+                      <Home size={15} color="#3b82f6" />
+                    </div>
+                    {isEditingThisRoom ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <input
+                          type="number"
+                          autoFocus
+                          value={newTargetRoomValue}
+                          onChange={(e) => setNewTargetRoomValue(e.target.value)}
+                          style={{ width: '55px', padding: '2px 4px', fontSize: '13px', borderRadius: '4px', border: '1px solid #3b82f6' }}
+                          placeholder="Số mới"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateSingleRoomNumber(room.roomNumber)}
+                          style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '3px 6px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}
+                        >
+                          Lưu
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setEditingRoomNumber(null); setNewTargetRoomValue(''); }}
+                          style={{ background: '#e2e8f0', color: '#334155', border: 'none', padding: '3px 5px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span>Phòng {room.roomNumber < 10 ? `0${room.roomNumber}` : room.roomNumber}</span>
+                        {canManage && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingRoomNumber(room.roomNumber);
+                              setNewTargetRoomValue(String(room.roomNumber));
+                            }}
+                            title="Chỉnh sửa số phòng này (đổi cho tất cả thành viên)"
+                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px', display: 'flex', alignItems: 'center', color: '#64748b' }}
+                          >
+                            <Edit3 size={13} />
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div className="room-card-header-right">
                     {!isEmpty && (
                       <span className={`gender-tag ${room.genderType === 'Nữ' ? 'nu' : 'nam'}`}>
-                        Phòng {room.genderType}
+                        {room.genderType}
                       </span>
                     )}
 
@@ -891,22 +1407,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                       <button
                         type="button"
                         onClick={() => openAddStudentModalForRoom(room.roomNumber, room.genderType)}
-                        title={`Chọn sinh viên vắng để đưa vào Phòng ${room.roomNumber}`}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '3px',
-                          border: '1px solid #2563eb',
-                          background: '#eff6ff',
-                          color: '#2563eb',
-                          padding: '3px 7px',
-                          borderRadius: '6px',
-                          fontSize: '11px',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                        }}
+                        title={`Thêm sinh viên vào phòng ${room.roomNumber}`}
+                        className="btn-add-mini"
                       >
-                        <Plus size={13} />
+                        <Plus size={12} />
                         <span>Thêm</span>
                       </button>
                     )}
@@ -917,29 +1421,17 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                         onClick={() =>
                           setActiveDropdownRoom(isDropdownOpen ? null : room.roomNumber)
                         }
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '4px',
-                          border: '1px solid #cbd5e1',
-                          background: currentLeaderKey ? '#fef9c3' : '#ffffff',
-                          color: currentLeaderKey ? '#854d0e' : '#475569',
-                          padding: '3px 8px',
-                          borderRadius: '6px',
-                          fontSize: '11px',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                        }}
+                        className={`btn-leader-toggle ${currentLeaderKey ? 'has-leader' : ''}`}
                       >
                         {currentLeaderKey ? (
                           <>
-                            <Crown size={13} color="#eab308" />
+                            <Crown size={12} color="#eab308" />
                             <span>TP</span>
                           </>
                         ) : (
                           <>
-                            <UserCheck size={13} />
-                            <span>Xét TP</span>
+                            <UserCheck size={12} />
+                            <span>TP</span>
                           </>
                         )}
                       </button>
@@ -948,32 +1440,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                 </div>
 
                 {isDropdownOpen && !isEmpty && canManage && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: '42px',
-                      right: '12px',
-                      zIndex: 20,
-                      background: '#ffffff',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '8px',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                      padding: '6px',
-                      minWidth: '200px',
-                      maxHeight: '220px',
-                      overflowY: 'auto',
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontWeight: 700,
-                        color: '#64748b',
-                        padding: '4px 8px',
-                        borderBottom: '1px solid #f1f5f9',
-                        marginBottom: '4px',
-                      }}
-                    >
+                  <div className="leader-dropdown-popover">
+                    <div className="leader-dropdown-title">
                       CHỌN TRƯỞNG PHÒNG
                     </div>
 
@@ -981,21 +1449,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                       <button
                         type="button"
                         onClick={() => handleRemoveLeader(room.roomNumber)}
-                        style={{
-                          width: '100%',
-                          textAlign: 'left',
-                          padding: '6px 8px',
-                          fontSize: '12px',
-                          color: '#dc2626',
-                          background: '#fef2f2',
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                          marginBottom: '4px',
-                          fontWeight: 600,
-                        }}
+                        className="leader-remove-btn"
                       >
-                        ✕ Hủy vị trí Trưởng phòng
+                        ✕ Hủy trưởng phòng
                       </button>
                     )}
 
@@ -1010,26 +1466,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                           key={studentKey + '-' + idx}
                           type="button"
                           onClick={() => handleSelectLeader(room.roomNumber, studentKey)}
-                          style={{
-                            width: '100%',
-                            textAlign: 'left',
-                            padding: '6px 8px',
-                            fontSize: '12px',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            background: isSelected ? '#fefce8' : 'transparent',
-                            color: isSelected ? '#854d0e' : '#334155',
-                            fontWeight: isSelected ? 700 : 500,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                          }}
+                          className={`leader-option-item ${isSelected ? 'selected' : ''}`}
                         >
                           <span>
                             {idx + 1}. {studentName}
                           </span>
-                          {isSelected && <Crown size={12} color="#eab308" />}
+                          {isSelected && <Crown size={11} color="#eab308" />}
                         </button>
                       );
                     })}
@@ -1037,9 +1479,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                 )}
 
                 <div className="room-capacity">
-                  <span>Sức chứa: <strong>{activeRoomStudents.length}/{MAX_PER_ROOM}</strong></span>
+                  <span>Sỉ số: <strong>{activeRoomStudents.length}/{MAX_PER_ROOM}</strong></span>
                   <span className={`status-pill ${isFull ? 'full' : isEmpty ? 'free' : 'available'}`}>
-                    {isFull ? 'Đã Đầy (12/12)' : isEmpty ? 'Trống' : 'Còn Chỗ'}
+                    {isFull ? 'Đầy' : isEmpty ? 'Trống' : 'Còn chỗ'}
                   </span>
                 </div>
 
@@ -1055,7 +1497,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
                 <div className="room-student-list">
                   {activeRoomStudents.length === 0 ? (
-                    <div className="empty-text">Phòng trống</div>
+                    <div className="empty-text">Chưa có sinh viên trong phòng</div>
                   ) : (
                     activeRoomStudents.map((st: any, idx) => {
                       if (!st) return null;
@@ -1064,76 +1506,92 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                       const isLeader = currentLeaderKey === studentKey;
                       const studentName = st.HoVaTen || st.name;
                       const studentTeacher = st.ThayCo || st.thayCo || st.HoTen || st.hoTen;
+                      
                       const isTeacherMatch = selectedTeacherFilter ? studentTeacher === selectedTeacherFilter : true;
+                      const query = searchTerm.trim().toLowerCase();
+                      const isSearchMatch = query ? (String(studentName || '').toLowerCase().includes(query) || String(displayCode || '').toLowerCase().includes(query)) : true;
+                      const isMatched = isTeacherMatch && isSearchMatch;
+                      const finalScore = calculateFinalScore(studentKey);
 
                       return (
                         <div
                           key={studentKey + '-' + idx}
-                          className="student-item"
+                          className={`student-row-card ${isLeader ? 'is-leader' : ''} ${((selectedTeacherFilter || searchTerm) && isMatched) ? 'matched' : ''}`}
                           style={{
-                            backgroundColor: isLeader
-                              ? '#fefce8'
-                              : (selectedTeacherFilter && isTeacherMatch ? '#eff6ff' : undefined),
-                            borderColor: isLeader
-                              ? '#fde047'
-                              : (selectedTeacherFilter && isTeacherMatch ? '#bfdbfe' : undefined),
-                            opacity: selectedTeacherFilter && !isTeacherMatch ? 0.4 : 1,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '8px',
-                            padding: '6px 8px'
+                            opacity: (selectedTeacherFilter || searchTerm) && !isMatched ? 0.35 : 1,
+                            border: (searchTerm && isSearchMatch) ? '1px solid #3b82f6' : undefined
                           }}
                         >
-                          <div style={{ flex: 1, minWidth: '0' }}>
-                            <span
-                              className="st-name"
-                              style={{
-                                color: isLeader ? '#854d0e' : (isTeacherMatch && selectedTeacherFilter ? '#1e40af' : undefined),
-                                fontWeight: isLeader || (isTeacherMatch && selectedTeacherFilter) ? 700 : undefined,
-                                display: 'block',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap'
-                              }}
-                            >
-                              {isLeader && (
-                                <Crown
-                                  size={14}
-                                  color="#eab308"
-                                  style={{ marginRight: 4, verticalAlign: 'middle' }}
-                                />
+                          <div className="student-info-top">
+                            <div className="student-name-wrap">
+                              <span className="student-name-text">
+                                {isLeader && (
+                                  <Crown
+                                    size={13}
+                                    color="#eab308"
+                                    style={{ marginRight: 3, verticalAlign: 'middle' }}
+                                  />
+                                )}
+                                {idx + 1}. {studentName} <span className="student-code-muted">({displayCode})</span>
+                              </span>
+                              {studentTeacher && <span className="student-teacher-muted">GV: {studentTeacher}</span>}
+                            </div>
+
+                            <div className="student-actions-right">
+                              {viewMode === 'single' && (
+                                <span className={`score-badge-pill ${finalScore < 10 ? 'low' : 'good'}`}>
+                                  {finalScore}đ
+                                </span>
                               )}
-                              {idx + 1}. {studentName} ({displayCode})
-                            </span>
-                            {studentTeacher && <span style={{ fontSize: '10px', color: '#64748b' }}>GV: {studentTeacher}</span>}
+
+                              {canManage && isRoomLocked && (
+                                <button
+                                  type="button"
+                                  onClick={() => setStudentToDelete(st)}
+                                  title="Đánh dấu vắng học"
+                                  className="btn-mark-absent-mini"
+                                >
+                                  <UserX size={11} />
+                                </button>
+                              )}
+                            </div>
                           </div>
 
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                            {canManage && isRoomLocked && (
-                              <button
-                                type="button"
-                                onClick={() => setStudentToDelete(st)}
-                                title="Đánh dấu vắng và ẩn khỏi sơ đồ phòng"
-                                style={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '2px',
-                                  background: '#fef2f2',
-                                  border: '1px solid #f87171',
-                                  color: '#dc2626',
-                                  padding: '2px 6px',
-                                  borderRadius: '4px',
-                                  fontSize: '11px',
-                                  fontWeight: 600,
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                <UserX size={12} />
-                                <span>Nghỉ</span>
-                              </button>
-                            )}
-                          </div>
+                          {viewMode === 'single' && (
+                            <div className="score-day-scroll-row">
+                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((day) => {
+                                const dayViolations = scores[studentKey]?.[day] || [];
+                                return (
+                                  <div key={day} className="score-day-col">
+                                    <span className="day-label-text">T{day}</span>
+                                    {dayViolations.map((v, i) => (
+                                      <span 
+                                        key={i} 
+                                        title={`Trừ ${v.penalty}đ (${v.displayCode}). Click để xóa`} 
+                                        onClick={() => handleToggleViolation(studentKey, day, v.code, v.displayCode, v.penalty)} 
+                                        className="violation-chip"
+                                      >
+                                        {v.displayCode}
+                                      </span>
+                                    ))}
+                                    {canManage && (
+                                      <select 
+                                        onChange={(e) => handleSelectChange(studentKey, day, e.target.value, e.target)} 
+                                        className="violation-select-mini"
+                                      >
+                                        <option value="">+</option>
+                                        {violations.map((v) => (
+                                          <option key={v.code} value={v.code}>{v.code} (-{v.penalty}đ)</option>
+                                        ))}
+                                        <option value="ADD_CUSTOM" style={{ fontWeight: 'bold', color: '#2563eb' }}>➕ Thêm lỗi...</option>
+                                        <option value="MANAGE_RULES" style={{ fontWeight: 'bold', color: '#4f46e5' }}>⚙️ Quản lý...</option>
+                                      </select>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       );
                     })
@@ -1145,103 +1603,151 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         )}
       </div>
 
-      {/* Modal chọn sinh viên vắng để đưa vào phòng thay vì nhập tay */}
+      {/* Modal Thêm sinh viên (Hỗ trợ cả chọn từ danh sách vắng hoặc nhập thủ công) */}
       {isAddStudentOpen && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          padding: '16px'
-        }}>
-          <div style={{
-            background: '#ffffff',
-            borderRadius: '12px',
-            padding: '24px',
-            maxWidth: '480px',
-            width: '100%',
-            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
-            border: '1px solid #e2e8f0'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, fontSize: '18px', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <UserPlus size={20} color="#2563eb" />
-                Đưa Sinh Viên Vắng Trở Lại Phòng {targetRoomForAdd}
+        <div className="modal-overlay">
+          <div className="modal-card" style={{ maxWidth: '480px' }}>
+            <div className="modal-header">
+              <h3 className="modal-title-text">
+                <UserPlus size={18} color="#2563eb" />
+                Thêm sinh viên vào Phòng {targetRoomForAdd}
               </h3>
               <button 
                 type="button" 
                 onClick={() => setIsAddStudentOpen(false)}
-                style={{ background: 'transparent', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}
+                className="modal-close-btn"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleAssignAbsentStudentToRoom} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#475569', marginBottom: '6px' }}>
-                  Chọn sinh viên đang vắng mặt từ danh sách:
-                </label>
-                {absentStudentsList.length === 0 ? (
-                  <div style={{ padding: '12px', background: '#f8fafc', borderRadius: '6px', color: '#64748b', fontSize: '13px', textAlign: 'center', border: '1px solid #e2e8f0' }}>
-                    Hiện không có sinh viên nào đang ở trạng thái vắng mặt.
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', borderBottom: '1px solid #e2e8f0', paddingBottom: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setAddMethod('absent')}
+                style={{
+                  flex: 1, padding: '6px', borderRadius: '6px', border: 'none', fontWeight: 600, cursor: 'pointer',
+                  background: addMethod === 'absent' ? '#2563eb' : '#f1f5f9',
+                  color: addMethod === 'absent' ? '#fff' : '#475569',
+                  fontSize: '13px'
+                }}
+              >
+                Chọn từ DS vắng mặt
+              </button>
+              <button
+                type="button"
+                onClick={() => setAddMethod('manual')}
+                style={{
+                  flex: 1, padding: '6px', borderRadius: '6px', border: 'none', fontWeight: 600, cursor: 'pointer',
+                  background: addMethod === 'manual' ? '#2563eb' : '#f1f5f9',
+                  color: addMethod === 'manual' ? '#fff' : '#475569',
+                  fontSize: '13px'
+                }}
+              >
+                Nhập thủ công
+              </button>
+            </div>
+
+            <form onSubmit={handleAddStudentSubmit} className="modal-form">
+              {addMethod === 'absent' ? (
+                <div>
+                  <label className="modal-label">
+                    Chọn sinh viên đang vắng mặt:
+                  </label>
+                  {absentStudentsList.length === 0 ? (
+                    <div className="modal-empty-notice">
+                      Không có sinh viên nào đang vắng mặt. Bạn có thể chọn tab "Nhập thủ công" phía trên.
+                    </div>
+                  ) : (
+                    <select
+                      required
+                      value={selectedAbsentStudentId}
+                      onChange={(e) => setSelectedAbsentStudentId(e.target.value)}
+                      className="modal-select-dropdown"
+                    >
+                      <option value="">-- Chọn sinh viên --</option>
+                      {absentStudentsList.map((st: any) => {
+                        const sKey = String(st.MSSV || st.studentId || st.id);
+                        const sName = st.HoVaTen || st.name;
+                        const sGender = st.GioiTinh || st.gender || '';
+                        return (
+                          <option key={sKey} value={sKey}>
+                            {sName} ({sKey}) - {sGender}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  )}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div>
+                    <label className="modal-label">Mã số sinh viên (MSSV):</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="VD: 31215... hoặc B21..."
+                      value={manualMssv}
+                      onChange={(e) => setManualMssv(e.target.value)}
+                      style={{ width: '100%', padding: '8px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' }}
+                    />
                   </div>
-                ) : (
-                  <select
-                    required
-                    value={selectedAbsentStudentId}
-                    onChange={(e) => setSelectedAbsentStudentId(e.target.value)}
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '14px', background: '#fff', outline: 'none', cursor: 'pointer' }}
-                  >
-                    <option value="">-- Chọn sinh viên vắng --</option>
-                    {absentStudentsList.map((st: any) => {
-                      const sKey = String(st.MSSV || st.studentId || st.id);
-                      const sName = st.HoVaTen || st.name;
-                      const sGender = st.GioiTinh || st.gender || '';
-                      return (
-                        <option key={sKey} value={sKey}>
-                          {sName} ({sKey}) - Giới tính: {sGender}
-                        </option>
-                      );
-                    })}
-                  </select>
-                )}
+                  <div>
+                    <label className="modal-label">Họ và tên sinh viên:</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="VD: Nguyễn Văn A"
+                      value={manualName}
+                      onChange={(e) => setManualName(e.target.value)}
+                      style={{ width: '100%', padding: '8px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <div style={{ flex: 1 }}>
+                      <label className="modal-label">Giới tính:</label>
+                      <select
+                        value={manualGender}
+                        onChange={(e) => setManualGender(e.target.value as 'Nam' | 'Nữ')}
+                        style={{ width: '100%', padding: '8px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' }}
+                      >
+                        <option value="Nam">Nam</option>
+                        <option value="Nữ">Nữ</option>
+                      </select>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label className="modal-label">Giảng viên quản lý:</label>
+                      <input
+                        type="text"
+                        placeholder="VD: Thầy Nam"
+                        value={manualTeacher}
+                        onChange={(e) => setManualTeacher(e.target.value)}
+                        style={{ width: '100%', padding: '8px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="modal-tip-box" style={{ marginTop: '10px' }}>
+                Hệ thống sẽ cập nhật và xếp sinh viên vào Phòng {targetRoomForAdd}.
               </div>
 
-              <div style={{ fontSize: '12px', color: '#64748b', background: '#f8fafc', padding: '10px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
-                💡 Khi chọn và xác nhận, hệ thống sẽ tự động cập nhật trạng thái của sinh viên thành <strong>có mặt</strong> và xếp vào đúng Phòng {targetRoomForAdd}.
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+              <div className="modal-footer-btns" style={{ marginTop: '16px' }}>
                 <button
                   type="button"
                   onClick={() => setIsAddStudentOpen(false)}
                   disabled={isSubmittingAdd}
-                  style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#475569', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}
+                  className="modal-btn-cancel"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingAdd || absentStudentsList.length === 0 || !selectedAbsentStudentId}
-                  style={{ 
-                    padding: '8px 16px', 
-                    borderRadius: '6px', 
-                    border: '1px solid #2563eb', 
-                    background: (absentStudentsList.length === 0 || !selectedAbsentStudentId) ? '#93c5fd' : '#2563eb', 
-                    color: '#ffffff', 
-                    fontSize: '14px', 
-                    fontWeight: 600, 
-                    cursor: (absentStudentsList.length === 0 || !selectedAbsentStudentId) ? 'not-allowed' : 'pointer' 
-                  }}
+                  disabled={isSubmittingAdd || (addMethod === 'absent' && (absentStudentsList.length === 0 || !selectedAbsentStudentId))}
+                  className={`modal-btn-submit ${(addMethod === 'absent' && (absentStudentsList.length === 0 || !selectedAbsentStudentId)) ? 'disabled' : ''}`}
                 >
-                  {isSubmittingAdd ? 'Đang xử lý...' : 'Xác nhận đưa vào phòng'}
+                  {isSubmittingAdd ? 'Đang xử lý...' : 'Xác nhận'}
                 </button>
               </div>
             </form>
@@ -1249,66 +1755,108 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         </div>
       )}
 
-      {studentToDelete && (
+      {/* Modal Quản lý danh mục lỗi (Thêm/Sửa/Xóa lỗi) */}
+      {isViolationModalOpen && (
         <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          padding: '16px'
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000
         }}>
-          <div style={{
-            background: '#ffffff',
-            borderRadius: '12px',
-            padding: '24px',
-            maxWidth: '400px',
-            width: '100%',
-            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
-            border: '1px solid #e2e8f0'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-              <div style={{
-                background: '#fef2f2',
-                padding: '10px',
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#dc2626'
-              }}>
-                <AlertCircle size={24} />
+          <div style={{ backgroundColor: '#fff', padding: '24px', borderRadius: '8px', width: '500px', maxWidth: '90%', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
+            <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Settings size={20} color="#4f46e5" /> Quản lý danh mục lỗi
+            </h3>
+
+            <form onSubmit={handleAddRuleFromModal} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px', background: '#f8fafc', padding: '12px', borderRadius: '6px' }}>
+              <h4 style={{ fontSize: '14px', color: '#334155' }}>Thêm / Chỉnh sửa lỗi mới</h4>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input
+                  type="text"
+                  placeholder="Mã (VD: NHẬU)"
+                  value={newCode}
+                  onChange={(e) => setNewCode(e.target.value)}
+                  required
+                  style={{ flex: 1, padding: '8px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+                />
+                <input
+                  type="number"
+                  step="0.5"
+                  placeholder="Điểm trừ"
+                  value={newPenalty}
+                  onChange={(e) => setNewPenalty(parseFloat(e.target.value))}
+                  required
+                  style={{ width: '90px', padding: '8px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+                />
               </div>
-              <div>
-                <h3 style={{ margin: 0, fontSize: '18px', color: '#1e293b' }}>Xác nhận vắng học</h3>
-                <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#64748b' }}>Hành động này sẽ cập nhật trạng thái vắng</p>
-              </div>
+              <input
+                type="text"
+                placeholder="Tên mô tả chi tiết lỗi"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+                style={{ width: '100%', padding: '8px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+              />
+              <button type="submit" style={{ backgroundColor: '#2563eb', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                <Plus size={16} /> Lưu quy định
+              </button>
+            </form>
+
+            <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '4px', marginBottom: '16px' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ background: '#f1f5f9' }}>
+                    <th style={{ padding: '8px', textAlign: 'left' }}>Mã</th>
+                    <th style={{ padding: '8px', textAlign: 'left' }}>Mô tả</th>
+                    <th style={{ padding: '8px', textAlign: 'left' }}>Điểm trừ</th>
+                    <th style={{ padding: '8px', textAlign: 'center' }}>Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {violations.map((v) => (
+                    <tr key={v.code} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '8px', fontWeight: 'bold' }}>{v.code}</td>
+                      <td style={{ padding: '8px' }}>{v.label}</td>
+                      <td style={{ padding: '8px', color: '#dc2626' }}>-{v.penalty}đ</td>
+                      <td style={{ padding: '8px', textAlign: 'center' }}>
+                        {!DEFAULT_VIOLATIONS.some(def => def.code === v.code) && (
+                          <button type="button" onClick={() => handleDeleteRule(v.code)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444' }} title="Xóa lỗi">
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
 
-            <p style={{ fontSize: '14px', color: '#334155', marginBottom: '20px', lineHeight: '1.5' }}>
-              Bạn có chắc chắn muốn đánh dấu sinh viên <strong>{(studentToDelete as any).HoVaTen || studentToDelete.name}</strong> ({studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id}) là vắng mặt và xóa khỏi phòng không?
+            <div style={{ textAlign: 'right' }}>
+              <button type="button" onClick={() => setIsViolationModalOpen(false)} style={{ backgroundColor: '#64748b', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer' }}>
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {studentToDelete && (
+        <div className="modal-overlay">
+          <div className="modal-card confirm-modal">
+            <div className="confirm-modal-header">
+              <div className="confirm-icon-wrap">
+                <AlertCircle size={20} />
+              </div>
+              <h3 className="modal-title-text">Xác nhận vắng học</h3>
+            </div>
+
+            <p className="confirm-modal-desc">
+              Bạn có chắc chắn muốn đánh dấu sinh viên <strong>{(studentToDelete as any).HoVaTen || studentToDelete.name}</strong> là vắng mặt và đưa ra khỏi phòng không?
             </p>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+            <div className="modal-footer-btns">
               <button
                 type="button"
                 onClick={() => setStudentToDelete(null)}
                 disabled={isDeleting}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: '6px',
-                  border: '1px solid #cbd5e1',
-                  background: '#ffffff',
-                  color: '#475569',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  cursor: 'pointer'
-                }}
+                className="modal-btn-cancel"
               >
                 Hủy
               </button>
@@ -1316,19 +1864,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                 type="button"
                 onClick={confirmMarkAbsent}
                 disabled={isDeleting}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: '6px',
-                  border: '1px solid #dc2626',
-                  background: '#dc2626',
-                  color: '#ffffff',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px'
-                }}
+                className="modal-btn-danger"
               >
                 {isDeleting ? 'Đang xử lý...' : 'Xác nhận vắng'}
               </button>
