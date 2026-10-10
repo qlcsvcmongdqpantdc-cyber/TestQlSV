@@ -5,7 +5,6 @@ import { Login } from './components/Login';
 import { UserManagement } from './components/UserManagement';
 import { ManageStudents } from './components/ManageStudents';
 import { RoomAllocation } from './components/RoomAllocation';
-import { RoomScoring } from './components/RoomScoring';
 import { CourseHistory } from './components/CourseHistory';
 import { BorrowList } from './components/BorrowList';
 import { supabase } from './supabaseClient';
@@ -439,12 +438,6 @@ export function App() {
               />
             )}
 
-            {activeTab === 'scoring' && (
-              <RoomScoring 
-                students={students} 
-                currentUser={currentUser} 
-              />
-            )}
 
             {activeTab === 'borrow-list' && (
               <BorrowList students={students} />

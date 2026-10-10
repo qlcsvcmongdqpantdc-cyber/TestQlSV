@@ -110,6 +110,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
   const [lockedRoomsData, setLockedRoomsData] = useState<Room[] | null>(null);
+  const [extraEmptyRooms, setExtraEmptyRooms] = useState<{ gender: 'Nam' | 'Nữ' }[]>([]);
 
   useEffect(() => {
     const fetchScoringData = async () => {
@@ -321,19 +322,19 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
     const groupAndSortByTeacher = (group: Student[]) => {
       const teacherMap: Record<string, Student[]> = {};
+      const teacherInsertionOrder: string[] = [];
       
       group.forEach((s: any) => {
         const teacher = String(s?.ThayCo || s?.thayCo || s?.HoTen || s?.hoTen || 'Chưa phân công').trim();
         if (!teacherMap[teacher]) {
           teacherMap[teacher] = [];
+          teacherInsertionOrder.push(teacher);
         }
         teacherMap[teacher].push(s);
       });
 
-      const sortedTeachers = Object.keys(teacherMap).sort((a, b) => a.localeCompare(b, 'vi', { sensitivity: 'accent' }));
-      
       let orderedList: Student[] = [];
-      sortedTeachers.forEach(teacher => {
+      teacherInsertionOrder.forEach(teacher => {
         const sortedStudentsOfTeacher = sortByName(teacherMap[teacher]);
         orderedList = orderedList.concat(sortedStudentsOfTeacher);
       });
@@ -345,7 +346,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     const processedMales = groupAndSortByTeacher(allMales);
 
     const rooms: Room[] = [];
-    let currentRoomNumber = 1;
 
     const fillToRooms = (group: Student[], gender: 'Nữ' | 'Nam') => {
       if (group.length === 0) return;
@@ -353,7 +353,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       while (index < group.length) {
         const chunk = group.slice(index, index + MAX_PER_ROOM);
         rooms.push({
-          roomNumber: currentRoomNumber++,
+          roomNumber: 0, // Sẽ đánh số lại sau
           students: chunk,
           genderType: gender,
           hasPenalized: false,
@@ -363,13 +363,36 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     };
 
     fillToRooms(processedFemales, 'Nữ');
+    
+    // Thêm các phòng nữ trống phụ nếu có
+    const extraFemaleRooms = extraEmptyRooms.filter(r => r.gender === 'Nữ');
+    extraFemaleRooms.forEach(() => {
+      rooms.push({
+        roomNumber: 0,
+        students: [],
+        genderType: 'Nữ',
+        hasPenalized: false,
+      });
+    });
+
     fillToRooms(processedMales, 'Nam');
+
+    // Thêm các phòng nam trống phụ nếu có
+    const extraMaleRooms = extraEmptyRooms.filter(r => r.gender === 'Nam');
+    extraMaleRooms.forEach(() => {
+      rooms.push({
+        roomNumber: 0,
+        students: [],
+        genderType: 'Nam',
+        hasPenalized: false,
+      });
+    });
 
     if (rooms.length < INITIAL_ROOMS) {
       const needed = INITIAL_ROOMS - rooms.length;
       for (let i = 0; i < needed; i++) {
         rooms.push({
-          roomNumber: rooms.length + 1,
+          roomNumber: 0,
           students: [],
           genderType: 'Trống',
           hasPenalized: false,
@@ -377,8 +400,15 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       }
     }
 
-    return rooms;
-  }, [students, MAX_PER_ROOM, INITIAL_ROOMS]);
+    // Đánh lại số thứ tự phòng từ 1 đến hết
+    return rooms.map((r, idx) => ({ ...r, roomNumber: idx + 1 }));
+  }, [students, MAX_PER_ROOM, INITIAL_ROOMS, extraEmptyRooms]);
+
+  const handleAddExtraRoom = (gender: 'Nam' | 'Nữ') => {
+    if (!canManage) return;
+    setExtraEmptyRooms(prev => [...prev, { gender }]);
+    showToast(`Đã thêm 1 phòng ${gender} mới thành công!`, 'success');
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -1243,6 +1273,25 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         <div className="header-actions-wrapper">
           {canManage && (
             <>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => handleAddExtraRoom('Nữ')}
+                  className="btn-action-secondary"
+                  style={{ backgroundColor: '#fce7f3', color: '#db2777', border: '1px solid #fbcfe8' }}
+                >
+                  <Plus size={16} /> Thêm phòng Nữ
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAddExtraRoom('Nam')}
+                  className="btn-action-secondary"
+                  style={{ backgroundColor: '#dbeafe', color: '#1d4ed8', border: '1px solid #bfdbfe' }}
+                >
+                  <Plus size={16} /> Thêm phòng Nam
+                </button>
+              </div>
+
               <button
                 type="button"
                 onClick={() => setIsViolationModalOpen(true)}
@@ -1514,9 +1563,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                     {!isEmpty && canManage && (
                       <button
                         type="button"
-                        onClick={() =>
-                          setActiveDropdownRoom(isDropdownOpen ? null : room.roomNumber)
-                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveDropdownRoom(isDropdownOpen ? null : room.roomNumber);
+                        }}
                         className={`btn-leader-toggle ${currentLeaderKey ? 'has-leader' : ''}`}
                       >
                         {currentLeaderKey ? (
@@ -1532,47 +1582,50 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                         )}
                       </button>
                     )}
+
+                    {isDropdownOpen && !isEmpty && canManage && (
+                      <div 
+                        className="leader-dropdown-popover"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="leader-dropdown-title">
+                          CHỌN TRƯỞNG PHÒNG
+                        </div>
+
+                        {currentLeaderKey && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveLeader(room.roomNumber)}
+                            className="leader-remove-btn"
+                          >
+                            ✕ Hủy trưởng phòng
+                          </button>
+                        )}
+
+                        {activeRoomStudents.map((st: any, idx: number) => {
+                          if (!st) return null;
+                          const studentKey = String(st.MSSV || st.studentId || st.id);
+                          const isSelected = currentLeaderKey === studentKey;
+                          const studentName = st.HoVaTen || st.name;
+
+                          return (
+                            <button
+                              key={studentKey + '-' + idx}
+                              type="button"
+                              onClick={() => handleSelectLeader(room.roomNumber, studentKey)}
+                              className={`leader-option-item ${isSelected ? 'selected' : ''}`}
+                            >
+                              <span>
+                                {idx + 1}. {studentName}
+                              </span>
+                              {isSelected && <Crown size={11} color="#eab308" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
-
-                {isDropdownOpen && !isEmpty && canManage && (
-                  <div className="leader-dropdown-popover">
-                    <div className="leader-dropdown-title">
-                      CHỌN TRƯỞNG PHÒNG
-                    </div>
-
-                    {currentLeaderKey && (
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveLeader(room.roomNumber)}
-                        className="leader-remove-btn"
-                      >
-                        ✕ Hủy trưởng phòng
-                      </button>
-                    )}
-
-                    {activeRoomStudents.map((st: any, idx: number) => {
-                      if (!st) return null;
-                      const studentKey = String(st.MSSV || st.studentId || st.id);
-                      const isSelected = currentLeaderKey === studentKey;
-                      const studentName = st.HoVaTen || st.name;
-
-                      return (
-                        <button
-                          key={studentKey + '-' + idx}
-                          type="button"
-                          onClick={() => handleSelectLeader(room.roomNumber, studentKey)}
-                          className={`leader-option-item ${isSelected ? 'selected' : ''}`}
-                        >
-                          <span>
-                            {idx + 1}. {studentName}
-                          </span>
-                          {isSelected && <Crown size={11} color="#eab308" />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
 
                 <div className="room-capacity">
                   <span>Sỉ số: <strong>{activeRoomStudents.length}/{MAX_PER_ROOM}</strong></span>
