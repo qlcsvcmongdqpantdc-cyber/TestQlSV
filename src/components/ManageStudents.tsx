@@ -196,7 +196,7 @@ export function ManageStudents({
     XLSX.writeFile(workbook, `${fileName}.xlsx`);
   };
 
-  // 🌟 ĐÃ SỬA: Lọc dữ liệu an toàn tránh lỗi toLowerCase của undefined
+  // Lọc dữ liệu an toàn tránh lỗi toLowerCase của undefined[cite: 18]
   const filteredStudents = students.filter((student) => {
     const studentName = String(student?.name || '').toLowerCase();
     const studentId = String(student?.studentId || '').toLowerCase();
@@ -276,6 +276,17 @@ export function ManageStudents({
 
         if (insertError) throw insertError;
       }
+
+      // 🌟 ĐÃ THÊM: Cập nhật trả isLocked về false và xóa dữ liệu khóa phòng trong RoomConfig[cite: 19]
+      const { error: roomConfigError } = await supabase
+        .from('RoomConfig')
+        .upsert({
+          id: 1,
+          isLocked: false,
+          locked_data: null
+        });
+
+      if (roomConfigError) throw roomConfigError;
 
       const { error: deleteError } = await supabase
         .from('DanhSachSinhVien')

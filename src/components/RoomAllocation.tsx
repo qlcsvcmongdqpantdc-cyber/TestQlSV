@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Home, Users, AlertTriangle, Crown, UserCheck, Filter, Lock, Unlock, UserX, AlertCircle, UserPlus, CheckCircle, Plus, Edit3, Eye, Settings, Trash2 } from 'lucide-react';
+import { Home, Users, AlertTriangle, Crown, UserCheck, Filter, Lock, Unlock, UserX, AlertCircle, UserPlus, CheckCircle, Plus, Edit3, Eye, Settings, Trash2, FileSpreadsheet } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import type { Student } from '../types/student';
 import type { User as AuthUser } from '../types/auth';
 import { supabase } from '../supabaseClient';
@@ -60,7 +61,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [leaders, setLeaders] = useState<Record<number, string>>({});
   const [activeDropdownRoom, setActiveDropdownRoom] = useState<number | null>(null);
 
-  const [viewMode, setViewMode] = useState<'all' | 'single'>('all'); //[cite: 13]
+  const [viewMode, setViewMode] = useState<'all' | 'single'>('all');
   const [selectedRoomNumber, setSelectedRoomNumber] = useState<number>(1);
 
   const [editingRoomNumber, setEditingRoomNumber] = useState<number | null>(null);
@@ -77,10 +78,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [isSavingScores, setIsSavingScores] = useState<boolean>(false);
 
   const [scores, setScores] = useState<ScoringMap>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
   const [violations, setViolations] = useState<ViolationRule[]>(DEFAULT_VIOLATIONS);
   const [isViolationModalOpen, setIsViolationModalOpen] = useState<boolean>(false);
 
-  // State cho thêm lỗi tùy chỉnh từ modal quản lý
   const [newCode, setNewCode] = useState<string>('');
   const [newLabel, setNewLabel] = useState<string>('');
   const [newPenalty, setNewPenalty] = useState<number>(1);
@@ -89,11 +90,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [targetRoomForAdd, setTargetRoomForAdd] = useState<number | null>(null);
   const [targetRoomGender, setTargetRoomGender] = useState<'Nam' | 'Nữ' | 'Trống'>('Nam');
   
-  // Option thêm sinh viên: 'absent' (Chọn từ DS vắng) hoặc 'manual' (Nhập thủ công)
   const [addMethod, setAddMethod] = useState<'absent' | 'manual'>('absent');
   const [selectedAbsentStudentId, setSelectedAbsentStudentId] = useState<string>('');
   
-  // Form state cho nhập thủ công
   const [manualMssv, setManualMssv] = useState<string>('');
   const [manualName, setManualName] = useState<string>('');
   const [manualGender, setManualGender] = useState<'Nam' | 'Nữ'>('Nam');
@@ -132,9 +131,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         const { data: scoreData } = await supabase.from('ChamDiem').select('*');
         if (scoreData && scoreData.length > 0) {
           const loadedScores: ScoringMap = {};
+          const loadedNotes: Record<string, string> = {};
           scoreData.forEach((row: any) => {
             const msv = String(row.MSV || row.msv || '');
             if (!msv) return;
+            loadedNotes[msv] = row.GhiChu || row.ghiChu || '';
             loadedScores[msv] = {};
             for (let day = 1; day <= 10; day++) {
               const dayValue = row[String(day)] || row[day];
@@ -155,6 +156,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             }
           });
           setScores(loadedScores);
+          setNotes(loadedNotes);
         }
       } catch (err) {
         console.error('Lỗi tải dữ liệu chấm điểm:', err);
@@ -536,6 +538,78 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const rooms = getRoomsToDisplay;
 
+  const handleExportExcel = () => {
+    const allAssignedStudents = rooms.flatMap((room) => 
+      (room.students || []).map((st: any) => ({
+        ...st,
+        Phong: room.roomNumber
+      }))
+    );
+
+    if (allAssignedStudents.length === 0) {
+      showToast('Không có dữ liệu sinh viên trong phòng để xuất Excel!', 'error');
+      return;
+    }
+
+    const wb = XLSX.utils.book_new();
+
+    const allStudentsData = allAssignedStudents.map((st: any, idx: number) => {
+      const studentKey = String(st.MSSV || st.studentId || st.id);
+      const finalScore = calculateFinalScore(studentKey);
+      const studentScores = scores[studentKey] || {};
+
+      const row: Record<string, any> = {
+        'STT': idx + 1,
+        'MSV': st.MSSV || st.studentId || st.id || '',
+        'Họ và Tên': st.HoVaTen || st.name || '',
+        'Phòng': st.Phong || '',
+        'Giảng viên': st.ThayCo || st.thayCo || st.HoTen || st.hoTen || '',
+        'Điểm Nề Nếp': finalScore,
+      };
+
+      for (let day = 1; day <= 10; day++) {
+        row[`Ngày ${day}`] = (studentScores[day] || []).map((e) => e.displayCode).join(', ');
+      }
+      row['Ghi chú'] = notes[studentKey] || '';
+      return row;
+    });
+
+    const wsAll = XLSX.utils.json_to_sheet(allStudentsData);
+    XLSX.utils.book_append_sheet(wb, wsAll, 'Tat_Ca_Phong');
+
+    rooms.forEach((room) => {
+      if (room.students && room.students.length > 0) {
+        const roomData = room.students.map((st: any, idx: number) => {
+          const studentKey = String(st.MSSV || st.studentId || st.id);
+          const finalScore = calculateFinalScore(studentKey);
+          const studentScores = scores[studentKey] || {};
+
+          const row: Record<string, any> = {
+            'STT': idx + 1,
+            'MSV': st.MSSV || st.studentId || st.id || '',
+            'Họ và Tên': st.HoVaTen || st.name || '',
+            'Phòng': room.roomNumber,
+            'Giảng viên': st.ThayCo || st.thayCo || st.HoTen || st.hoTen || '',
+            'Điểm Nề Nếp': finalScore,
+          };
+
+          for (let day = 1; day <= 10; day++) {
+            row[`Ngày ${day}`] = (studentScores[day] || []).map((e) => e.displayCode).join(', ');
+          }
+          row['Ghi chú'] = notes[studentKey] || '';
+          return row;
+        });
+
+        const wsRoom = XLSX.utils.json_to_sheet(roomData);
+        const safeSheetName = `Phong_${room.roomNumber}`.replace(/[\/\\?\*:[\]]/g, '_').substring(0, 31);
+        XLSX.utils.book_append_sheet(wb, wsRoom, safeSheetName);
+      }
+    });
+
+    XLSX.writeFile(wb, `Phan_Phong_Va_Cham_Diem_KTX_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    showToast('Xuất file Excel thành công!', 'success');
+  };
+
   const handleUpdateSingleRoomNumber = async (oldRoomNum: number) => {
     if (!canManage) return;
     const newRoomNum = parseInt(newTargetRoomValue, 10);
@@ -700,13 +774,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           }
         }
 
-        const dayDataRecord: Record<string, string> = {};
+        const dayDataRecord: Record<string, string | null> = {};
         for (let day = 1; day <= 10; day++) {
           const entries = scores[mssv]?.[day] || [];
           if (entries.length > 0) {
             dayDataRecord[String(day)] = entries.map(e => e.code).join(', ');
           } else {
-            dayDataRecord[String(day)] = '';
+            dayDataRecord[String(day)] = null;
           }
         }
 
@@ -718,9 +792,22 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           ...dayDataRecord
         };
 
-        await supabase
+        const { data: existingRecord } = await supabase
           .from('ChamDiem')
-          .upsert(rowPayload, { onConflict: 'MSV' });
+          .select('STT')
+          .eq('MSV', mssv)
+          .maybeSingle();
+
+        if (existingRecord) {
+          await supabase
+            .from('ChamDiem')
+            .update(rowPayload)
+            .eq('MSV', mssv);
+        } else {
+          await supabase
+            .from('ChamDiem')
+            .insert([rowPayload]);
+        }
       }
 
       showToast('Xác nhận nhập điểm và đẩy lên database thành công!', 'success');
@@ -821,7 +908,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           );
         }
       } else {
-        // Chế độ nhập thủ công
         if (!manualMssv.trim() || !manualName.trim()) {
           showToast('Vui lòng nhập đầy đủ MSSV và Họ tên!', 'error');
           setIsSubmittingAdd(false);
@@ -1185,6 +1271,16 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               >
                 <CheckCircle size={16} />
                 {isSavingScores ? 'Đang đẩy điểm...' : 'Xác Nhận Nhập Điểm'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportExcel}
+                className="btn-action-secondary"
+                style={{ backgroundColor: '#0284c7', color: '#fff', border: 'none' }}
+                title="Xuất Excel theo từng phòng"
+              >
+                <FileSpreadsheet size={16} /> Xuất Excel
               </button>
 
               <button
@@ -1603,7 +1699,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         )}
       </div>
 
-      {/* Modal Thêm sinh viên (Hỗ trợ cả chọn từ danh sách vắng hoặc nhập thủ công) */}
       {isAddStudentOpen && (
         <div className="modal-overlay">
           <div className="modal-card" style={{ maxWidth: '480px' }}>
@@ -1755,7 +1850,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         </div>
       )}
 
-      {/* Modal Quản lý danh mục lỗi (Thêm/Sửa/Xóa lỗi) */}
       {isViolationModalOpen && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,

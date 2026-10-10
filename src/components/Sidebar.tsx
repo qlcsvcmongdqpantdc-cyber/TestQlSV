@@ -3,7 +3,6 @@ import {
   UserPlus,
   Users,
   Home,
-  ClipboardCheck,
   UserCog,
   History,
   Package,
@@ -95,21 +94,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <Home size={18} /> Phân Phòng KTX
           </button>
-
-          <button
-            onClick={() => setActiveTab('scoring')}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px',
-              borderRadius: '8px', border: 'none',
-              backgroundColor: activeTab === 'scoring' ? '#2563eb' : 'transparent',
-              color: activeTab === 'scoring' ? '#ffffff' : '#cbd5e1',
-              fontWeight: activeTab === 'scoring' ? 600 : 500,
-              fontSize: '14px', cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s',
-            }}
-          >
-            <ClipboardCheck size={18} /> Chấm Điểm Nề Nếp
-          </button>
-
+            
           <button
             onClick={() => setActiveTab('borrow-list')}
             style={{
