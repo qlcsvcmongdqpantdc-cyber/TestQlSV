@@ -949,7 +949,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
         await supabase
           .from('DanhSachSinhVien')
-          .update({ Vang: null, Phong: targetRoomForAdd })
+          .update({ Vang: null, Phong: targetRoomForAdd, DiTre: 'x', late_at: new Date().toISOString() })
           .eq('MSSV', mssvValue);
 
         await supabase
@@ -964,7 +964,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           ...studentToRestore,
           Vang: null,
           isAbsent: false,
-          Phong: targetRoomForAdd
+          Phong: targetRoomForAdd,
+          DiTre: 'x',
+          late_at: new Date().toISOString()
         };
 
         if (setStudents) {
@@ -1005,7 +1007,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           GioiTinh: manualGender,
           ThayCo: teacherVal,
           Phong: targetRoomForAdd,
-          Vang: null
+          Vang: null,
+          DiTre: 'x',
+          late_at: new Date().toISOString()
         };
 
         const { data: existingStudent } = await supabase
@@ -1042,14 +1046,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             Phong: targetRoomForAdd
           }, { onConflict: 'MSV' });
 
-        updatedStudentObj = {
-          MSSV: mssvValue,
-          HoVaTen: hoVaTen,
-          GioiTinh: manualGender,
-          ThayCo: teacherVal,
-          Phong: targetRoomForAdd,
-          Vang: null
-        };
+        updatedStudentObj = newStudentPayload;
 
         if (setStudents) {
           setStudents((prev) => [...(Array.isArray(prev) ? prev : []), updatedStudentObj as unknown as Student]);
@@ -1087,7 +1084,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       setLockedRoomsData(updatedLockedRooms);
       setIsRoomLocked(true);
 
-      showToast(`Đã đưa sinh viên vào Phòng ${targetRoomForAdd} thành công!`, 'success');
+      showToast(`Đã thêm sinh viên vào Phòng ${targetRoomForAdd} và đánh dấu đi trễ!`, 'success');
       setIsAddStudentOpen(false);
       setTargetRoomForAdd(null);
       setSelectedAbsentStudentId('');
@@ -1740,6 +1737,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                                   />
                                 )}
                                 {idx + 1}. {studentName} <span className="student-code-muted">({displayCode})</span>
+                                {(st.DiTre === 'x' || (st as any).diTre === 'x') && (
+                                  <span style={{ marginLeft: '6px', fontSize: '11px', background: '#fef3c7', color: '#d97706', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 }}>Đi trễ</span>
+                                )}
                               </span>
                               {studentTeacher && <span className="student-teacher-muted">GV: {studentTeacher}</span>}
                             </div>
@@ -1936,7 +1936,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               )}
 
               <div className="modal-tip-box" style={{ marginTop: '10px' }}>
-                Hệ thống sẽ cập nhật và xếp sinh viên vào Phòng {targetRoomForAdd}.
+                Hệ thống sẽ cập nhật, xếp sinh viên vào Phòng {targetRoomForAdd} và tự động đánh dấu đi trễ.
               </div>
 
               <div className="modal-footer-btns" style={{ marginTop: '16px' }}>
