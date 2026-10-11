@@ -353,7 +353,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       while (index < group.length) {
         const chunk = group.slice(index, index + MAX_PER_ROOM);
         rooms.push({
-          roomNumber: 0, // Sẽ đánh số lại sau
+          roomNumber: 0,
           students: chunk,
           genderType: gender,
           hasPenalized: false,
@@ -364,7 +364,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
     fillToRooms(processedFemales, 'Nữ');
     
-    // Thêm các phòng nữ trống phụ nếu có
     const extraFemaleRooms = extraEmptyRooms.filter(r => r.gender === 'Nữ');
     extraFemaleRooms.forEach(() => {
       rooms.push({
@@ -377,7 +376,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
     fillToRooms(processedMales, 'Nam');
 
-    // Thêm các phòng nam trống phụ nếu có
     const extraMaleRooms = extraEmptyRooms.filter(r => r.gender === 'Nam');
     extraMaleRooms.forEach(() => {
       rooms.push({
@@ -400,13 +398,57 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       }
     }
 
-    // Đánh lại số thứ tự phòng từ 1 đến hết
     return rooms.map((r, idx) => ({ ...r, roomNumber: idx + 1 }));
   }, [students, MAX_PER_ROOM, INITIAL_ROOMS, extraEmptyRooms]);
 
-  const handleAddExtraRoom = (gender: 'Nam' | 'Nữ') => {
+  const handleAddExtraRoom = async (gender: 'Nam' | 'Nữ') => {
     if (!canManage) return;
     setExtraEmptyRooms(prev => [...prev, { gender }]);
+
+    let currentRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
+    const newRoom: Room = {
+      roomNumber: 0,
+      students: [],
+      genderType: gender,
+      hasPenalized: false,
+    };
+
+    if (gender === 'Nữ') {
+      let lastFemaleIdx = -1;
+      currentRooms.forEach((r, idx) => {
+        if (r.genderType === 'Nữ') lastFemaleIdx = idx;
+      });
+      if (lastFemaleIdx !== -1) {
+        currentRooms.splice(lastFemaleIdx + 1, 0, newRoom);
+      } else {
+        currentRooms.unshift(newRoom);
+      }
+    } else {
+      let lastMaleIdx = -1;
+      currentRooms.forEach((r, idx) => {
+        if (r.genderType === 'Nam') lastMaleIdx = idx;
+      });
+      if (lastMaleIdx !== -1) {
+        currentRooms.splice(lastMaleIdx + 1, 0, newRoom);
+      } else {
+        currentRooms.push(newRoom);
+      }
+    }
+
+    const reindexedRooms = currentRooms.map((r, idx) => ({ ...r, roomNumber: idx + 1 }));
+    setLockedRoomsData(reindexedRooms);
+    setIsRoomLocked(true);
+
+    try {
+      await supabase.from('RoomConfig').upsert({
+        id: 1,
+        isLocked: true,
+        locked_data: reindexedRooms
+      });
+    } catch (err) {
+      console.error(err);
+    }
+
     showToast(`Đã thêm 1 phòng ${gender} mới thành công!`, 'success');
   };
 
@@ -966,9 +1008,25 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           Vang: null
         };
 
-        const { error: insertError } = await supabase
+        const { data: existingStudent } = await supabase
           .from('DanhSachSinhVien')
-          .upsert(newStudentPayload, { onConflict: 'MSSV' });
+          .select('MSSV')
+          .eq('MSSV', mssvValue)
+          .maybeSingle();
+
+        let insertError;
+        if (existingStudent) {
+          const { error } = await supabase
+            .from('DanhSachSinhVien')
+            .update(newStudentPayload)
+            .eq('MSSV', mssvValue);
+          insertError = error;
+        } else {
+          const { error } = await supabase
+            .from('DanhSachSinhVien')
+            .insert([newStudentPayload]);
+          insertError = error;
+        }
 
         if (insertError) {
           showToast('Lỗi khi thêm sinh viên vào CSDL: ' + insertError.message, 'error');
