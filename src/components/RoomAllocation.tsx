@@ -30,15 +30,7 @@ interface ViolationRule {
   penalty: number;
 }
 
-const DEFAULT_VIOLATIONS: ViolationRule[] = [
-  { code: 'V', displayCode: 'V', label: '1. Điểm danh: Không phép (V)', penalty: 2 },
-  { code: 'P_DD', displayCode: 'P', label: '1. Điểm danh: Có phép (P)', penalty: 1 },
-  { code: 'K', displayCode: 'K', label: '2. Thể dục: Không phép (K)', penalty: 2 },
-  { code: 'P_TD', displayCode: 'P', label: '2. Thể dục: Có phép (P)', penalty: 1 },
-  { code: 'D', displayCode: 'D', label: '3. Gác đêm: Không phép (D)', penalty: 2 },
-  { code: 'P_GD', displayCode: 'P', label: '3. Gác đêm: Có phép (P)', penalty: 1 },
-  { code: 'N', displayCode: 'N', label: '4. Nội vụ: Không sắp xếp (N)', penalty: 1 },
-];
+const DEFAULT_VIOLATIONS: ViolationRule[] = [];
 
 interface RoomAllocationProps {
   students: Student[];
@@ -48,7 +40,6 @@ interface RoomAllocationProps {
   currentUser?: (AuthUser & { can_manage?: boolean }) | null;
 }
 
-// HÀM KIỂM TRA ĐI TRỄ QUÉT MỌI TRƯỜNG (BAO GỒM isLate TRONG INTERFACE STUDENT CỦA BẠN)
 const checkIsLate = (st: any): boolean => {
   if (!st) return false;
   if (st.isLate === true || st.isLate === 'true' || st.isLate === 1) return true;
@@ -58,7 +49,6 @@ const checkIsLate = (st: any): boolean => {
   return str === 'x' || str === 'true' || str === '1';
 };
 
-// HÀM LẤY MÃ SỐ SINH VIÊN ĐỒNG NHẤT
 const getStudentCode = (st: any): string => {
   if (!st) return '';
   return String(st.MSSV || st.studentId || st.id || st.MSV || '').trim();
@@ -91,14 +81,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [studentToDelete, setStudentToDelete] = useState<Student | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [isSavingRooms, setIsSavingRooms] = useState<boolean>(false);
-  const [isSavingScores, setIsSavingScores] = useState<boolean>(false);
 
   const [scores, setScores] = useState<ScoringMap>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [violations, setViolations] = useState<ViolationRule[]>(DEFAULT_VIOLATIONS);
   const [isViolationModalOpen, setIsViolationModalOpen] = useState<boolean>(false);
   
-  // MODAL XEM SINH VIÊN ĐI TRỄ
   const [isLateModalOpen, setIsLateModalOpen] = useState<boolean>(false);
 
   const [newCode, setNewCode] = useState<string>('');
@@ -195,6 +183,55 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return Math.max(0, 10 - totalPenalty);
   }, [scores]);
 
+  // --- HÀM LƯU ĐIỂM TỰ ĐỘNG LÊN SUPABASE NGAY LẬP TỨC CHO TỪNG HỌC SINH ---
+  const saveStudentScoreToDB = async (studentKey: string, updatedStudentScores: Record<number, RecordEntry[]>) => {
+    try {
+      let hoVaTen = '';
+      let roomNum: number | null = null;
+
+      rooms.forEach(r => {
+        (r.students || []).forEach((st: any) => {
+          if (getStudentCode(st) === studentKey) {
+            hoVaTen = st.HoVaTen || st.name || '';
+            roomNum = r.roomNumber;
+          }
+        });
+      });
+
+      if (!hoVaTen) {
+        const foundAbsent = absentStudentsList.find((s: any) => getStudentCode(s) === studentKey);
+        if (foundAbsent) {
+          hoVaTen = (foundAbsent as any).HoVaTen || (foundAbsent as any).name || '';
+        }
+      }
+
+      const finalScore = Math.max(0, 10 - Object.values(updatedStudentScores).reduce((acc, dayItems) => {
+        return acc + dayItems.reduce((sum, item) => sum + item.penalty, 0);
+      }, 0));
+
+      const dayDataRecord: Record<string, string | null> = {};
+      for (let day = 1; day <= 10; day++) {
+        const entries = updatedStudentScores[day] || [];
+        dayDataRecord[String(day)] = entries.length > 0 ? entries.map(e => e.code).join(', ') : null;
+      }
+
+      const rowPayload = {
+        MSV: studentKey,
+        HoVaTen: hoVaTen || studentKey,
+        DiemNeNep: finalScore,
+        Phong: roomNum,
+        ...dayDataRecord
+      };
+
+      await supabase
+        .from('ChamDiem')
+        .upsert([rowPayload], { onConflict: 'MSV' });
+
+    } catch (err) {
+      console.error('Lỗi auto-save điểm:', err);
+    }
+  };
+
   const handleToggleViolation = async (studentKey: string, day: number, code: string, displayCode: string, penalty: number) => {
     if (!currentUser || (currentUser.role !== 'admin' && currentUser.can_manage !== true)) {
       showToast('Bạn không có quyền thay đổi điểm nề nếp!', 'error');
@@ -206,11 +243,21 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       const dayData = studentData[day] || [];
       const exists = dayData.some((item) => item.code === code);
       const updatedDayData = exists ? dayData.filter((item) => item.code !== code) : [...dayData, { code, displayCode, penalty }];
-      return { ...prev, [studentKey]: { ...studentData, [day]: updatedDayData } };
+      
+      const newStudentScores = { ...studentData, [day]: updatedDayData };
+      const newAllScores = { ...prev, [studentKey]: newStudentScores };
+
+      // Gọi lưu thẳng lên DB ngầm lập tức
+      saveStudentScoreToDB(studentKey, newStudentScores);
+
+      return newAllScores;
     });
   };
 
-  const handleSelectChange = async (studentKey: string, day: number, selectedValue: string, eventTarget: HTMLSelectElement) => {
+  const handleViolationSelectChange = async (studentKey: string, day: number, e: React.ChangeEvent<HTMLSelectElement>) => {
+    const selectedValue = e.target.value;
+    const targetElement = e.target;
+    
     if (!selectedValue) return;
 
     if (selectedValue === 'MANAGE_RULES') {
@@ -218,14 +265,14 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     } else if (selectedValue === 'ADD_CUSTOM') {
       const codeInput = prompt('Nhập mã/ký tự lỗi tự chọn (VD: OT, VSTH...):');
       if (!codeInput || !codeInput.trim()) {
-        eventTarget.value = '';
+        targetElement.value = '';
         return;
       }
       const penaltyInput = prompt(`Nhập số điểm trừ cho lỗi [${codeInput.trim().toUpperCase()}]:`, '1');
       const penalty = parseFloat(penaltyInput || '1');
       if (isNaN(penalty) || penalty <= 0) {
         showToast('Số điểm trừ không hợp lệ!', 'error');
-        eventTarget.value = '';
+        targetElement.value = '';
         return;
       }
 
@@ -248,9 +295,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         console.error(err);
       }
 
-      if (!violations.some((v) => v.code === newRule.code)) {
-        setViolations((prev) => [...prev, newRule]);
-      }
+      setViolations((prev) => {
+        if (prev.some(v => v.code === newRule.code)) return prev;
+        return [...prev, newRule];
+      });
 
       await handleToggleViolation(studentKey, day, newRule.code, newRule.displayCode, newRule.penalty);
     } else {
@@ -259,7 +307,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         await handleToggleViolation(studentKey, day, target.code, target.displayCode, target.penalty);
       }
     }
-    eventTarget.value = '';
+
+    targetElement.value = '';
   };
 
   const handleAddRuleFromModal = async (e: React.FormEvent) => {
@@ -603,7 +652,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     });
   }, [students]);
 
-  // HÀM TÍNH DANH SÁCH PHÒNG TƯƠI VÀ ÉP KIỂU AN TOÀN CHO TYPESCRIPT
   const getRoomsToDisplay = useMemo(() => {
     let baseRooms = (!isRoomLocked || !lockedRoomsData) ? calculateRoomAllocation() : lockedRoomsData;
     const safeStudents = Array.isArray(students) ? students : [];
@@ -645,11 +693,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const rooms = getRoomsToDisplay;
 
-  // DANH SÁCH TỔNG HỢP CÁC SINH VIÊN ĐI TRỄ (QUÉT QUA CẢ BẢNG STUDENTS ĐỂ KHÔNG BỎ SÓT)
   const lateStudentsList = useMemo(() => {
     const result: { student: any; roomNumber: number }[] = [];
     
-    // 1. Dò qua các phòng đã chia
     rooms.forEach(room => {
       (room.students || []).forEach((st: any) => {
         if (!st) return;
@@ -659,7 +705,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       });
     });
 
-    // 2. Dò tiếp danh sách tổng students để phòng trường hợp phòng chưa cập nhật
     const safeStudents = Array.isArray(students) ? students : [];
     safeStudents.forEach((st: any) => {
       if (!st || st.isAbsent || st.Vang === 'x' || st.Vang === 'X') return;
@@ -883,78 +928,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       showToast('Lỗi khi lưu phòng: ' + (err?.message || err), 'error');
     } finally {
       setIsSavingRooms(false);
-    }
-  };
-
-  const handleSaveScoresToDatabase = async () => {
-    if (!currentUser || (currentUser.role !== 'admin' && currentUser.can_manage !== true)) {
-      showToast('Bạn không có quyền lưu điểm!', 'error');
-      return;
-    }
-
-    setIsSavingScores(true);
-    try {
-      const allStudentsList = [
-        ...rooms.flatMap(r => r.students || []),
-        ...absentStudentsList
-      ];
-
-      for (const st of allStudentsList) {
-        if (!st) continue;
-        const mssv = getStudentCode(st);
-        const hoVaTen = st.name || (st as any).HoVaTen || '';
-        const finalScore = calculateFinalScore(mssv);
-        
-        let roomNum: number | null = null;
-        for (const r of rooms) {
-          if ((r.students || []).some((s: any) => getStudentCode(s) === mssv)) {
-            roomNum = r.roomNumber;
-            break;
-          }
-        }
-
-        const dayDataRecord: Record<string, string | null> = {};
-        for (let day = 1; day <= 10; day++) {
-          const entries = scores[mssv]?.[day] || [];
-          if (entries.length > 0) {
-            dayDataRecord[String(day)] = entries.map(e => e.code).join(', ');
-          } else {
-            dayDataRecord[String(day)] = null;
-          }
-        }
-
-        const rowPayload = {
-          MSV: mssv,
-          HoVaTen: hoVaTen,
-          DiemNeNep: finalScore,
-          Phong: roomNum,
-          ...dayDataRecord
-        };
-
-        const { data: existingRecord } = await supabase
-          .from('ChamDiem')
-          .select('STT')
-          .eq('MSV', mssv)
-          .maybeSingle();
-
-        if (existingRecord) {
-          await supabase
-            .from('ChamDiem')
-            .update(rowPayload)
-            .eq('MSV', mssv);
-        } else {
-          await supabase
-            .from('ChamDiem')
-            .insert([rowPayload]);
-        }
-      }
-
-      showToast('Xác nhận nhập điểm và đẩy lên database thành công!', 'success');
-    } catch (err: any) {
-      console.error('Lỗi khi lưu điểm:', err);
-      showToast('Lỗi khi lưu điểm: ' + (err?.message || err), 'error');
-    } finally {
-      setIsSavingScores(false);
     }
   };
 
@@ -1394,7 +1367,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             </p>
           </div>
 
-          {/* CÁC THẺ THỐNG KÊ & NÚT XEM SINH VIÊN ĐI TRỄ */}
           <div className="room-stats" style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
             <div className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#f0f9ff', padding: '6px 12px', borderRadius: '8px', border: '1px solid #bae6fd', fontSize: '13px' }}>
               <Users size={16} color="#0284c7" />
@@ -1409,7 +1381,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               <span>Vắng: <strong>{totalAbsent} SV</strong></span>
             </div>
 
-            {/* NÚT BẤM XEM SINH VIÊN ĐI TRỄ - TỰ ĐỘNG ĐẾM ĐÚNG THEO isLate KHAI BÁO TRONG INTERFACE */}
             <button
               type="button"
               onClick={() => setIsLateModalOpen(true)}
@@ -1426,7 +1397,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           </div>
         </div>
 
-        {/* CỤM CÁC NÚT THAO TÁC */}
         {canManage && (
           <div 
             className="header-actions-toolbar" 
@@ -1493,19 +1463,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
             <button
               type="button"
-              onClick={handleSaveScoresToDatabase}
-              disabled={isSavingScores}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '6px',
-                border: 'none', backgroundColor: '#16a34a', color: '#ffffff', fontWeight: 600, fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s'
-              }}
-            >
-              <CheckCircle size={15} />
-              {isSavingScores ? 'Đang đẩy điểm...' : 'Xác Nhận Nhập Điểm'}
-            </button>
-
-            <button
-              type="button"
               onClick={handleExportExcel}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '6px',
@@ -1534,7 +1491,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         )}
       </div>
 
-      {/* THANH ĐỔI CHẾ ĐỘ HIỂN THỊ */}
       <div className="view-mode-switcher-bar" style={{ display: 'flex', gap: '12px', alignItems: 'center', margin: '16px 0', background: '#f8fafc', padding: '10px 14px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
         <span style={{ fontWeight: 600, fontSize: '14px', color: '#334155' }}>Chế độ hiển thị:</span>
         <button
@@ -1595,7 +1551,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         )}
       </div>
 
-      {/* THANH LỌC VÀ TÌM KIẾM */}
       <div className="filter-bar-container" style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
         <div className="filter-label">
           <Filter size={16} color="#2563eb" />
@@ -1648,7 +1603,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         )}
       </div>
 
-      {/* DANH SÁCH LƯỚI PHÒNG */}
       <div className="rooms-grid">
         {filteredRooms.length === 0 ? (
           <div className="no-rooms-found">
@@ -1910,10 +1864,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                                     ))}
                                     {canManage && (
                                       <select 
-                                        onChange={(e) => handleSelectChange(studentKey, day, e.target.value, e.target)} 
+                                        defaultValue=""
+                                        onChange={(e) => handleViolationSelectChange(studentKey, day, e)} 
                                         className="violation-select-mini"
                                       >
-                                        <option value="">+</option>
+                                        <option value="" disabled>+</option>
                                         {violations.map((v) => (
                                           <option key={v.code} value={v.code}>{v.code} (-{v.penalty}đ)</option>
                                         ))}
@@ -1937,7 +1892,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         )}
       </div>
 
-      {/* MODAL HIỂN THỊ DANH SÁCH SINH VIÊN ĐI TRỄ */}
       {isLateModalOpen && (
         <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1100 }}>
           <div className="modal-card" style={{ maxWidth: '580px', width: '90%', background: '#fff', borderRadius: '12px', padding: '24px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' }}>
@@ -2009,7 +1963,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         </div>
       )}
 
-      {/* MODAL THÊM SINH VIÊN */}
       {isAddStudentOpen && (
         <div className="modal-overlay">
           <div className="modal-card" style={{ maxWidth: '480px' }}>
@@ -2161,7 +2114,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         </div>
       )}
 
-      {/* MODAL QUẢN LÝ QUY ĐỊNH LỖI */}
       {isViolationModalOpen && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -2243,7 +2195,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         </div>
       )}
 
-      {/* MODAL XÁC NHẬN VẮNG */}
       {studentToDelete && (
         <div className="modal-overlay">
           <div className="modal-card confirm-modal">
