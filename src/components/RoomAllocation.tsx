@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Home, Users, AlertTriangle, Crown, UserCheck, Filter, Lock, Unlock, UserX, AlertCircle, UserPlus, CheckCircle, Plus, Edit3, Eye, Settings, Trash2, FileSpreadsheet } from 'lucide-react';
+import { Home, Users, AlertTriangle, Crown, UserCheck, Filter, Lock, Unlock, UserX, AlertCircle, UserPlus, CheckCircle, Plus, Edit3, Eye, Settings, Trash2, FileSpreadsheet, Clock } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import type { Student } from '../types/student';
 import type { User as AuthUser } from '../types/auth';
@@ -48,6 +48,22 @@ interface RoomAllocationProps {
   currentUser?: (AuthUser & { can_manage?: boolean }) | null;
 }
 
+// HÀM KIỂM TRA ĐI TRỄ QUÉT MỌI TRƯỜNG (BAO GỒM isLate TRONG INTERFACE STUDENT CỦA BẠN)
+const checkIsLate = (st: any): boolean => {
+  if (!st) return false;
+  if (st.isLate === true || st.isLate === 'true' || st.isLate === 1) return true;
+  const val = st.DiTre ?? st.diTre ?? st.Di_Tre ?? st.ditre;
+  if (val === true || val === 1) return true;
+  const str = String(val || '').trim().toLowerCase();
+  return str === 'x' || str === 'true' || str === '1';
+};
+
+// HÀM LẤY MÃ SỐ SINH VIÊN ĐỒNG NHẤT
+const getStudentCode = (st: any): string => {
+  if (!st) return '';
+  return String(st.MSSV || st.studentId || st.id || st.MSV || '').trim();
+};
+
 export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   students = [],
   setStudents,
@@ -81,6 +97,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [violations, setViolations] = useState<ViolationRule[]>(DEFAULT_VIOLATIONS);
   const [isViolationModalOpen, setIsViolationModalOpen] = useState<boolean>(false);
+  
+  // MODAL XEM SINH VIÊN ĐI TRỄ
+  const [isLateModalOpen, setIsLateModalOpen] = useState<boolean>(false);
 
   const [newCode, setNewCode] = useState<string>('');
   const [newLabel, setNewLabel] = useState<string>('');
@@ -293,7 +312,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     const safeStudents = Array.isArray(students) ? students : [];
     const allValidStudents = safeStudents.filter((s: any) => {
       if (!s) return false;
-      if (s.isAbsent || s.Vang === 'x') return false;
+      if (s.isAbsent || s.Vang === 'x' || s.Vang === 'X') return false;
       return true;
     });
 
@@ -304,9 +323,18 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
     const sortByName = (group: Student[]) => {
       return group.sort((a, b) => {
-        const nameA = String((a as any)?.HoVaTen || (a as any)?.name || '');
-        const nameB = String((b as any)?.HoVaTen || (b as any)?.name || '');
-        return nameA.localeCompare(nameB, 'vi', { sensitivity: 'accent' });
+        const fullNameA = String((a as any)?.HoVaTen || (a as any)?.name || '').trim();
+        const fullNameB = String((b as any)?.HoVaTen || (b as any)?.name || '').trim();
+
+        const partsA = fullNameA.split(/\s+/);
+        const partsB = fullNameB.split(/\s+/);
+
+        const firstNameA = partsA[partsA.length - 1] || '';
+        const firstNameB = partsB[partsB.length - 1] || '';
+
+        const cmp = firstNameA.localeCompare(firstNameB, 'vi', { sensitivity: 'accent' });
+        if (cmp !== 0) return cmp;
+        return fullNameA.localeCompare(fullNameB, 'vi', { sensitivity: 'accent' });
       });
     };
 
@@ -571,44 +599,79 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     const safeStudents = Array.isArray(students) ? students : [];
     return safeStudents.filter((s: any) => {
       if (!s) return false;
-      return s.isAbsent || s.Vang === 'x';
+      return s.isAbsent || s.Vang === 'x' || s.Vang === 'X';
     });
   }, [students]);
 
+  // HÀM TÍNH DANH SÁCH PHÒNG TƯƠI VÀ ÉP KIỂU AN TOÀN CHO TYPESCRIPT
   const getRoomsToDisplay = useMemo(() => {
     let baseRooms = (!isRoomLocked || !lockedRoomsData) ? calculateRoomAllocation() : lockedRoomsData;
     const safeStudents = Array.isArray(students) ? students : [];
 
     return baseRooms.map(room => {
-      const uniqueStudentMap = new Map();
-      
-      (room.students || []).forEach(lockedStudent => {
-        if (!lockedStudent) return;
-        const mssv = String(lockedStudent.MSSV || (lockedStudent as any).studentId || lockedStudent.id);
+      const updatedStudents = (room.students || []).map(lockedStudent => {
+        if (!lockedStudent) return null;
+        const mssv = getStudentCode(lockedStudent);
         
-        const freshStudent = safeStudents.find(s => 
-          s && String(s.MSSV || (s as any).studentId || (s as any).id) === mssv
-        );
+        const freshStudent = safeStudents.find(s => s && getStudentCode(s) === mssv);
 
         if (freshStudent) {
-          if (!freshStudent.isAbsent && freshStudent.Vang !== 'x') {
-            uniqueStudentMap.set(mssv, freshStudent);
-          }
-        } else {
-          if (!(lockedStudent as any).isAbsent && (lockedStudent as any).Vang !== 'x') {
-            uniqueStudentMap.set(mssv, lockedStudent);
-          }
+          const isLateVal = checkIsLate(freshStudent) || checkIsLate(lockedStudent);
+          return {
+            ...lockedStudent,
+            ...freshStudent,
+            isLate: isLateVal,
+            DiTre: isLateVal ? 'x' : null
+          };
         }
+
+        const isLateVal = checkIsLate(lockedStudent);
+        return {
+          ...lockedStudent,
+          isLate: isLateVal,
+          DiTre: isLateVal ? 'x' : null
+        };
+      }).filter((s): s is any => {
+        if (!s) return false;
+        return !s.isAbsent && s.Vang !== 'x' && s.Vang !== 'X';
       });
 
       return {
         ...room,
-        students: Array.from(uniqueStudentMap.values()) as Student[]
+        students: updatedStudents as unknown as Student[]
       };
     });
   }, [isRoomLocked, lockedRoomsData, calculateRoomAllocation, students]);
 
   const rooms = getRoomsToDisplay;
+
+  // DANH SÁCH TỔNG HỢP CÁC SINH VIÊN ĐI TRỄ (QUÉT QUA CẢ BẢNG STUDENTS ĐỂ KHÔNG BỎ SÓT)
+  const lateStudentsList = useMemo(() => {
+    const result: { student: any; roomNumber: number }[] = [];
+    
+    // 1. Dò qua các phòng đã chia
+    rooms.forEach(room => {
+      (room.students || []).forEach((st: any) => {
+        if (!st) return;
+        if (checkIsLate(st)) {
+          result.push({ student: st, roomNumber: room.roomNumber });
+        }
+      });
+    });
+
+    // 2. Dò tiếp danh sách tổng students để phòng trường hợp phòng chưa cập nhật
+    const safeStudents = Array.isArray(students) ? students : [];
+    safeStudents.forEach((st: any) => {
+      if (!st || st.isAbsent || st.Vang === 'x' || st.Vang === 'X') return;
+      const mssv = getStudentCode(st);
+      const existsInResult = result.some(r => getStudentCode(r.student) === mssv);
+      if (!existsInResult && checkIsLate(st)) {
+        result.push({ student: st, roomNumber: st.Phong || (st as any).room || 0 });
+      }
+    });
+
+    return result;
+  }, [rooms, students]);
 
   const handleExportExcel = () => {
     const allAssignedStudents = rooms.flatMap((room) => 
@@ -626,14 +689,16 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     const wb = XLSX.utils.book_new();
 
     const allStudentsData = allAssignedStudents.map((st: any, idx: number) => {
-      const studentKey = String(st.MSSV || st.studentId || st.id);
+      const studentKey = getStudentCode(st);
       const finalScore = calculateFinalScore(studentKey);
       const studentScores = scores[studentKey] || {};
+      const isLate = checkIsLate(st);
 
       const row: Record<string, any> = {
         'STT': idx + 1,
-        'MSV': st.MSSV || st.studentId || st.id || '',
+        'MSV': getStudentCode(st),
         'Họ và Tên': st.HoVaTen || st.name || '',
+        'Trạng thái': isLate ? 'Đi trễ' : 'Đúng giờ',
         'Phòng': st.Phong || '',
         'Giảng viên': st.ThayCo || st.thayCo || st.HoTen || st.hoTen || '',
         'Điểm Nề Nếp': finalScore,
@@ -652,14 +717,16 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     rooms.forEach((room) => {
       if (room.students && room.students.length > 0) {
         const roomData = room.students.map((st: any, idx: number) => {
-          const studentKey = String(st.MSSV || st.studentId || st.id);
+          const studentKey = getStudentCode(st);
           const finalScore = calculateFinalScore(studentKey);
           const studentScores = scores[studentKey] || {};
+          const isLate = checkIsLate(st);
 
           const row: Record<string, any> = {
             'STT': idx + 1,
-            'MSV': st.MSSV || st.studentId || st.id || '',
+            'MSV': getStudentCode(st),
             'Họ và Tên': st.HoVaTen || st.name || '',
+            'Trạng thái': isLate ? 'Đi trễ' : 'Đúng giờ',
             'Phòng': room.roomNumber,
             'Giảng viên': st.ThayCo || st.thayCo || st.HoTen || st.hoTen || '',
             'Điểm Nề Nếp': finalScore,
@@ -705,8 +772,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       }
 
       for (const st of targetRoomObj.students) {
-        const mssvValue = st?.MSSV || (st as any).studentId || st.id;
-        const hoVaTen = st?.name || (st as any).name || '';
+        const mssvValue = getStudentCode(st);
+        const hoVaTen = st?.name || (st as any).HoVaTen || '';
         if (mssvValue) {
           await supabase
             .from('DanhSachSinhVien')
@@ -759,8 +826,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
       for (const room of currentRoomsToSave) {
         for (const st of (room.students || [])) {
-          const mssvValue = st?.MSSV || (st as any).studentId || st.id;
-          const hoVaTen = st?.name || (st as any).name || '';
+          const mssvValue = getStudentCode(st);
+          const hoVaTen = st?.name || (st as any).HoVaTen || '';
           if (mssvValue) {
             await supabase
               .from('DanhSachSinhVien')
@@ -779,7 +846,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       }
 
       for (const st of absentStudentsList) {
-        const mssvValue = (st as any).MSSV || (st as any).studentId || (st as any).id;
+        const mssvValue = getStudentCode(st);
         const hoVaTen = (st as any).HoVaTen || (st as any).name || '';
         if (mssvValue) {
           await supabase
@@ -834,13 +901,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
       for (const st of allStudentsList) {
         if (!st) continue;
-        const mssv = String(st.MSSV || (st as any).studentId || st.id);
-        const hoVaTen = st.name || (st as any).name || '';
+        const mssv = getStudentCode(st);
+        const hoVaTen = st.name || (st as any).HoVaTen || '';
         const finalScore = calculateFinalScore(mssv);
         
         let roomNum: number | null = null;
         for (const r of rooms) {
-          if ((r.students || []).some((s: any) => String(s.MSSV || s.studentId || s.id) === mssv)) {
+          if ((r.students || []).some((s: any) => getStudentCode(s) === mssv)) {
             roomNum = r.roomNumber;
             break;
           }
@@ -922,10 +989,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           return;
         }
 
-        const studentToRestore = absentStudentsList.find((s: any) => {
-          const sKey = String(s.MSSV || s.studentId || s.id);
-          return sKey === selectedAbsentStudentId;
-        });
+        const studentToRestore = absentStudentsList.find((s: any) => getStudentCode(s) === selectedAbsentStudentId);
 
         if (!studentToRestore) {
           showToast('Không tìm thấy sinh viên được chọn!', 'error');
@@ -944,12 +1008,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           }
         }
 
-        mssvValue = (studentToRestore as any).MSSV || (studentToRestore as any).studentId || studentToRestore.id;
+        mssvValue = getStudentCode(studentToRestore);
         hoVaTen = (studentToRestore as any).HoVaTen || (studentToRestore as any).name || '';
 
         await supabase
           .from('DanhSachSinhVien')
-          .update({ Vang: null, Phong: targetRoomForAdd, DiTre: 'x', late_at: new Date().toISOString() })
+          .update({ Vang: null, Phong: targetRoomForAdd, DiTre: 'x', isLate: true, late_at: new Date().toISOString() })
           .eq('MSSV', mssvValue);
 
         await supabase
@@ -966,6 +1030,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           isAbsent: false,
           Phong: targetRoomForAdd,
           DiTre: 'x',
+          isLate: true,
           late_at: new Date().toISOString()
         };
 
@@ -973,8 +1038,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           setStudents((prev) =>
             (Array.isArray(prev) ? prev : []).map((s) => {
               if (!s) return s;
-              const sKey = String(s.MSSV || (s as any).studentId || s.id);
-              if (sKey === selectedAbsentStudentId) {
+              if (getStudentCode(s) === selectedAbsentStudentId) {
                 return updatedStudentObj as unknown as Student;
               }
               return s;
@@ -1009,6 +1073,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           Phong: targetRoomForAdd,
           Vang: null,
           DiTre: 'x',
+          isLate: true,
           late_at: new Date().toISOString()
         };
 
@@ -1099,10 +1164,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     if (!studentToDelete || !canManage) return;
 
     setIsDeleting(true);
-    const studentKey = String(studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id);
+    const studentKey = getStudentCode(studentToDelete);
 
     try {
-      const mssvValue = studentToDelete.MSSV || (studentToDelete as any).studentId || studentToDelete.id;
+      const mssvValue = getStudentCode(studentToDelete);
       const hoVaTen = (studentToDelete as any).HoVaTen || (studentToDelete as any).name || '';
 
       await supabase
@@ -1124,8 +1189,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         ...room,
         students: (room.students || []).filter((st: any) => {
           if (!st) return false;
-          const sKey = String(st.MSSV || st.studentId || st.id);
-          return sKey !== studentKey;
+          return getStudentCode(st) !== studentKey;
         })
       }));
 
@@ -1141,8 +1205,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         setStudents((prevStudents) =>
           (Array.isArray(prevStudents) ? prevStudents : []).map((s) => {
             if (!s) return s;
-            const sKey = String(s.MSSV || (s as any).studentId || s.id);
-            if (sKey === studentKey) {
+            if (getStudentCode(s) === studentKey) {
               return { ...s, isAbsent: true, Vang: 'x', Phong: null };
             }
             return s;
@@ -1211,7 +1274,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         if (!query) return teacherMatch;
 
         const name = String(st?.HoVaTen || st?.name || '').toLowerCase();
-        const mssv = String(st?.MSSV || st?.studentId || st?.id || '').toLowerCase();
+        const mssv = getStudentCode(st).toLowerCase();
         const searchMatch = name.includes(query) || mssv.includes(query);
 
         return teacherMatch && searchMatch;
@@ -1237,7 +1300,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     rooms.forEach((room) => {
       (room.students || []).forEach((st: any) => {
         if (!st) return;
-        const studentKey = String(st.MSSV || st.studentId || st.id);
+        const studentKey = getStudentCode(st);
         assignments.push({ studentKey, roomNumber: room.roomNumber });
       });
     });
@@ -1248,9 +1311,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   useEffect(() => {
     const loadedLeaders: Record<number, string> = {};
     rooms.forEach((room) => {
-      const leaderStudent = (room.students || []).find((st: any) => st && st.truongPhong === 'x');
+      const leaderStudent = (room.students || []).find((st: any) => st && (st.truongPhong === 'x' || st.truongPhong === 'X'));
       if (leaderStudent) {
-        const studentKey = String(leaderStudent.MSSV || leaderStudent.studentId || leaderStudent.id);
+        const studentKey = getStudentCode(leaderStudent);
         loadedLeaders[room.roomNumber] = studentKey;
       }
     });
@@ -1265,7 +1328,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     const currentRoom = rooms.find((r) => r.roomNumber === roomNumber);
     if (!currentRoom) return;
 
-    const roomStudentKeys = (currentRoom.students || []).map((st: any) => String(st.MSSV || st.studentId || st.id));
+    const roomStudentKeys = (currentRoom.students || []).map((st: any) => getStudentCode(st));
 
     if (onSetRoomLeader) {
       onSetRoomLeader(studentKey, roomStudentKeys);
@@ -1285,7 +1348,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     const currentRoom = rooms.find((r) => r.roomNumber === roomNumber);
     if (!currentRoom) return;
 
-    const roomStudentKeys = (currentRoom.students || []).map((st: any) => String(st.MSSV || st.studentId || st.id));
+    const roomStudentKeys = (currentRoom.students || []).map((st: any) => getStudentCode(st));
 
     if (onSetRoomLeader) {
       onSetRoomLeader(null, roomStudentKeys);
@@ -1299,7 +1362,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const totalAbsent = useMemo(() => {
     const safeStudents = Array.isArray(students) ? students : [];
-    return safeStudents.filter((s: any) => s && (s.isAbsent || s.Vang === 'x')).length;
+    return safeStudents.filter((s: any) => s && (s.isAbsent || s.Vang === 'x' || s.Vang === 'X')).length;
   }, [students]);
 
   return (
@@ -1311,111 +1374,168 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         </div>
       )}
 
-      <div className="room-header">
-        <div>
-          <h2>
-            Phân phòng & Chấm điểm nề nếp KTX 
-            <span className="room-count-badge">({rooms.length} Phòng)</span>
-            {isRoomLocked && (
-              <span className="locked-tag">
-                🔒 Đã khóa sơ đồ
+      {/* CỤM BANNER HEADER TRÊN CÙNG */}
+      <div className="room-header" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px' }}>
+              Phân phòng & Chấm điểm nề nếp KTX 
+              <span className="room-count-badge" style={{ fontSize: '13px', background: '#e2e8f0', padding: '2px 8px', borderRadius: '12px', color: '#334155' }}>
+                ({rooms.length} Phòng)
               </span>
-            )}
-          </h2>
-          <p>Quản lý phân phòng sinh viên và chấm điểm nề nếp trong cùng một giao diện trực quan.</p>
-        </div>
+              {isRoomLocked && (
+                <span className="locked-tag" style={{ fontSize: '12px', background: '#fef3c7', color: '#b45309', padding: '2px 8px', borderRadius: '6px', border: '1px solid #fcd34d' }}>
+                  🔒 Đã khóa sơ đồ
+                </span>
+              )}
+            </h2>
+            <p style={{ margin: '4px 0 0 0', color: '#64748b', fontSize: '13px' }}>
+              Quản lý phân phòng sinh viên và chấm điểm nề nếp trong cùng một giao diện trực quan.
+            </p>
+          </div>
 
-        <div className="header-actions-wrapper">
-          {canManage && (
-            <>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={() => handleAddExtraRoom('Nữ')}
-                  className="btn-action-secondary"
-                  style={{ backgroundColor: '#fce7f3', color: '#db2777', border: '1px solid #fbcfe8' }}
-                >
-                  <Plus size={16} /> Thêm phòng Nữ
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleAddExtraRoom('Nam')}
-                  className="btn-action-secondary"
-                  style={{ backgroundColor: '#dbeafe', color: '#1d4ed8', border: '1px solid #bfdbfe' }}
-                >
-                  <Plus size={16} /> Thêm phòng Nam
-                </button>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setIsViolationModalOpen(true)}
-                className="btn-action-secondary"
-                style={{ backgroundColor: '#4f46e5', color: '#fff', border: 'none' }}
-              >
-                <Settings size={16} /> Quản lý danh mục lỗi
-              </button>
-
-              <button
-                type="button"
-                onClick={handleConfirmAndSaveRooms}
-                disabled={isSavingRooms}
-                className="btn-action-primary"
-              >
-                <CheckCircle size={16} />
-                {isSavingRooms ? 'Đang lưu...' : 'Xác Nhận Phòng'}
-              </button>
-
-              <button
-                type="button"
-                onClick={handleSaveScoresToDatabase}
-                disabled={isSavingScores}
-                className="btn-action-primary"
-                style={{ backgroundColor: '#16a34a' }}
-              >
-                <CheckCircle size={16} />
-                {isSavingScores ? 'Đang đẩy điểm...' : 'Xác Nhận Nhập Điểm'}
-              </button>
-
-              <button
-                type="button"
-                onClick={handleExportExcel}
-                className="btn-action-secondary"
-                style={{ backgroundColor: '#0284c7', color: '#fff', border: 'none' }}
-                title="Xuất Excel theo từng phòng"
-              >
-                <FileSpreadsheet size={16} /> Xuất Excel
-              </button>
-
-              <button
-                type="button"
-                onClick={toggleLockRooms}
-                className={`btn-action-secondary ${isRoomLocked ? 'is-locked' : ''}`}
-              >
-                {isRoomLocked ? <Lock size={16} /> : <Unlock size={16} />}
-                {isRoomLocked ? 'Mở Khóa' : 'Khóa Cố Định'}
-              </button>
-            </>
-          )}
-
-          <div className="room-stats">
-            <div className="stat-card">
-              <Users size={16} color="#2563eb" />
+          {/* CÁC THẺ THỐNG KÊ & NÚT XEM SINH VIÊN ĐI TRỄ */}
+          <div className="room-stats" style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#f0f9ff', padding: '6px 12px', borderRadius: '8px', border: '1px solid #bae6fd', fontSize: '13px' }}>
+              <Users size={16} color="#0284c7" />
               <span>Tổng SV: <strong>{totalActiveAllocated} SV</strong></span>
             </div>
-            <div className="stat-card">
+            <div className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#f8fafc', padding: '6px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px' }}>
               <Home size={16} color="#475569" />
               <span>Phòng: <strong>{rooms.length}</strong></span>
             </div>
-            <div className="stat-card warning">
+            <div className="stat-card warning" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#fef2f2', padding: '6px 12px', borderRadius: '8px', border: '1px solid #fecaca', fontSize: '13px', color: '#dc2626' }}>
               <AlertTriangle size={16} color="#dc2626" />
               <span>Vắng: <strong>{totalAbsent} SV</strong></span>
             </div>
+
+            {/* NÚT BẤM XEM SINH VIÊN ĐI TRỄ - TỰ ĐỘNG ĐẾM ĐÚNG THEO isLate KHAI BÁO TRONG INTERFACE */}
+            <button
+              type="button"
+              onClick={() => setIsLateModalOpen(true)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '6px', background: '#fef3c7', padding: '6px 12px',
+                borderRadius: '8px', border: '1px solid #fcd34d', fontSize: '13px', color: '#b45309', fontWeight: 600,
+                cursor: 'pointer', transition: 'all 0.2s'
+              }}
+              title="Xem danh sách sinh viên đi trễ"
+            >
+              <Clock size={16} color="#d97706" />
+              <span>Trễ: <strong>{lateStudentsList.length} SV</strong></span>
+            </button>
           </div>
         </div>
+
+        {/* CỤM CÁC NÚT THAO TÁC */}
+        {canManage && (
+          <div 
+            className="header-actions-toolbar" 
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '10px',
+              alignItems: 'center',
+              justifyContent: 'flex-start',
+              background: '#ffffff',
+              padding: '12px 16px',
+              borderRadius: '10px',
+              border: '1px solid #e2e8f0',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => handleAddExtraRoom('Nữ')}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '6px',
+                border: '1px solid #fbcfe8', backgroundColor: '#fce7f3', color: '#db2777', fontWeight: 600, fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s'
+              }}
+            >
+              <Plus size={15} /> Thêm phòng Nữ
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleAddExtraRoom('Nam')}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '6px',
+                border: '1px solid #bfdbfe', backgroundColor: '#dbeafe', color: '#1d4ed8', fontWeight: 600, fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s'
+              }}
+            >
+              <Plus size={15} /> Thêm phòng Nam
+            </button>
+
+            <div style={{ height: '24px', width: '1px', backgroundColor: '#cbd5e1', margin: '0 4px' }} />
+
+            <button
+              type="button"
+              onClick={() => setIsViolationModalOpen(true)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '6px',
+                border: 'none', backgroundColor: '#4f46e5', color: '#ffffff', fontWeight: 600, fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s'
+              }}
+            >
+              <Settings size={15} /> Quản lý danh mục lỗi
+            </button>
+
+            <button
+              type="button"
+              onClick={handleConfirmAndSaveRooms}
+              disabled={isSavingRooms}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '6px',
+                border: 'none', backgroundColor: '#2563eb', color: '#ffffff', fontWeight: 600, fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s'
+              }}
+            >
+              <CheckCircle size={15} />
+              {isSavingRooms ? 'Đang lưu...' : 'Xác Nhận Phòng'}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSaveScoresToDatabase}
+              disabled={isSavingScores}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '6px',
+                border: 'none', backgroundColor: '#16a34a', color: '#ffffff', fontWeight: 600, fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s'
+              }}
+            >
+              <CheckCircle size={15} />
+              {isSavingScores ? 'Đang đẩy điểm...' : 'Xác Nhận Nhập Điểm'}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleExportExcel}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '6px',
+                border: 'none', backgroundColor: '#0284c7', color: '#ffffff', fontWeight: 600, fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s'
+              }}
+              title="Xuất Excel theo từng phòng"
+            >
+              <FileSpreadsheet size={15} /> Xuất Excel
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleLockRooms}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '6px',
+                border: isRoomLocked ? '1px solid #fca5a5' : '1px solid #cbd5e1',
+                backgroundColor: isRoomLocked ? '#fef2f2' : '#f8fafc',
+                color: isRoomLocked ? '#dc2626' : '#334155',
+                fontWeight: 600, fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s'
+              }}
+            >
+              {isRoomLocked ? <Lock size={15} /> : <Unlock size={15} />}
+              {isRoomLocked ? 'Mở Khóa' : 'Khóa Cố Định'}
+            </button>
+          </div>
+        )}
       </div>
 
-      <div className="view-mode-switcher-bar" style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', background: '#f8fafc', padding: '10px 14px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+      {/* THANH ĐỔI CHẾ ĐỘ HIỂN THỊ */}
+      <div className="view-mode-switcher-bar" style={{ display: 'flex', gap: '12px', alignItems: 'center', margin: '16px 0', background: '#f8fafc', padding: '10px 14px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
         <span style={{ fontWeight: 600, fontSize: '14px', color: '#334155' }}>Chế độ hiển thị:</span>
         <button
           type="button"
@@ -1475,10 +1595,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         )}
       </div>
 
-      <div className="filter-bar-container" style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+      {/* THANH LỌC VÀ TÌM KIẾM */}
+      <div className="filter-bar-container" style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
         <div className="filter-label">
           <Filter size={16} color="#2563eb" />
-          <span>Lọc theo HoTen:</span>
+          <span>Lọc theo Giảng viên:</span>
         </div>
 
         <select
@@ -1486,7 +1607,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           onChange={(e) => setSelectedTeacherFilter(e.target.value)}
           className="filter-select"
         >
-          <option value="">-- Tất cả HoTen --</option>
+          <option value="">-- Tất cả Giảng viên --</option>
           {teacherList.map((hoTen) => (
             <option key={hoTen} value={hoTen}>
               {hoTen}
@@ -1527,6 +1648,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         )}
       </div>
 
+      {/* DANH SÁCH LƯỚI PHÒNG */}
       <div className="rooms-grid">
         {filteredRooms.length === 0 ? (
           <div className="no-rooms-found">
@@ -1659,7 +1781,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
                         {activeRoomStudents.map((st: any, idx: number) => {
                           if (!st) return null;
-                          const studentKey = String(st.MSSV || st.studentId || st.id);
+                          const studentKey = getStudentCode(st);
                           const isSelected = currentLeaderKey === studentKey;
                           const studentName = st.HoVaTen || st.name;
 
@@ -1705,11 +1827,13 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                   ) : (
                     activeRoomStudents.map((st: any, idx) => {
                       if (!st) return null;
-                      const studentKey = String(st.MSSV || st.studentId || st.id);
-                      const displayCode = st.MSSV || st.studentId || st.id;
+                      const studentKey = getStudentCode(st);
+                      const displayCode = studentKey;
                       const isLeader = currentLeaderKey === studentKey;
                       const studentName = st.HoVaTen || st.name;
                       const studentTeacher = st.ThayCo || st.thayCo || st.HoTen || st.hoTen;
+                      
+                      const isLate = checkIsLate(st);
                       
                       const isTeacherMatch = selectedTeacherFilter ? studentTeacher === selectedTeacherFilter : true;
                       const query = searchTerm.trim().toLowerCase();
@@ -1737,8 +1861,11 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                                   />
                                 )}
                                 {idx + 1}. {studentName} <span className="student-code-muted">({displayCode})</span>
-                                {(st.DiTre === 'x' || (st as any).diTre === 'x') && (
-                                  <span style={{ marginLeft: '6px', fontSize: '11px', background: '#fef3c7', color: '#d97706', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 }}>Đi trễ</span>
+                                
+                                {isLate && (
+                                  <span style={{ marginLeft: '6px', fontSize: '11px', background: '#fef3c7', color: '#b45309', border: '1px solid #fcd34d', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                    Trễ
+                                  </span>
                                 )}
                               </span>
                               {studentTeacher && <span className="student-teacher-muted">GV: {studentTeacher}</span>}
@@ -1810,6 +1937,79 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         )}
       </div>
 
+      {/* MODAL HIỂN THỊ DANH SÁCH SINH VIÊN ĐI TRỄ */}
+      {isLateModalOpen && (
+        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1100 }}>
+          <div className="modal-card" style={{ maxWidth: '580px', width: '90%', background: '#fff', borderRadius: '12px', padding: '24px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' }}>
+            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #e2e8f0', paddingBottom: '12px' }}>
+              <h3 className="modal-title-text" style={{ margin: 0, fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px', color: '#b45309' }}>
+                <Clock size={20} color="#d97706" />
+                Danh sách sinh viên đi trễ ({lateStudentsList.length} SV)
+              </h3>
+              <button 
+                type="button" 
+                onClick={() => setIsLateModalOpen(false)}
+                className="modal-close-btn"
+                style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
+              {lateStudentsList.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '24px', color: '#64748b', fontSize: '14px' }}>
+                  Không có sinh viên nào đi trễ.
+                </div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>STT</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>MSSV</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>Họ và Tên</th>
+                      <th style={{ padding: '8px', textAlign: 'center' }}>Phòng</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>Giảng viên</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lateStudentsList.map(({ student: st, roomNumber }, index) => {
+                      const mssv = getStudentCode(st);
+                      const name = st.HoVaTen || st.name;
+                      const teacher = st.ThayCo || st.thayCo || st.HoTen || st.hoTen || 'Chưa phân công';
+                      return (
+                        <tr key={mssv + '-' + index} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '8px' }}>{index + 1}</td>
+                          <td style={{ padding: '8px', fontWeight: 600 }}>{mssv}</td>
+                          <td style={{ padding: '8px' }}>{name}</td>
+                          <td style={{ padding: '8px', textAlign: 'center' }}>
+                            <span style={{ background: '#eff6ff', color: '#1d4ed8', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                              {roomNumber > 0 ? `Phòng ${roomNumber}` : 'Chưa xếp'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '8px', color: '#64748b' }}>{teacher}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div style={{ textAlign: 'right', marginTop: '20px', borderTop: '1px solid #e2e8f0', paddingTop: '12px' }}>
+              <button
+                type="button"
+                onClick={() => setIsLateModalOpen(false)}
+                style={{ backgroundColor: '#64748b', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL THÊM SINH VIÊN */}
       {isAddStudentOpen && (
         <div className="modal-overlay">
           <div className="modal-card" style={{ maxWidth: '480px' }}>
@@ -1873,7 +2073,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                     >
                       <option value="">-- Chọn sinh viên --</option>
                       {absentStudentsList.map((st: any) => {
-                        const sKey = String(st.MSSV || st.studentId || st.id);
+                        const sKey = getStudentCode(st);
                         const sName = st.HoVaTen || st.name;
                         const sGender = st.GioiTinh || st.gender || '';
                         return (
@@ -1961,6 +2161,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         </div>
       )}
 
+      {/* MODAL QUẢN LÝ QUY ĐỊNH LỖI */}
       {isViolationModalOpen && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -2042,6 +2243,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         </div>
       )}
 
+      {/* MODAL XÁC NHẬN VẮNG */}
       {studentToDelete && (
         <div className="modal-overlay">
           <div className="modal-card confirm-modal">
