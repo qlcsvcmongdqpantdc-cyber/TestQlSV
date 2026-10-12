@@ -148,7 +148,7 @@ export function ManageStudents({
     }
   };
 
-  // Hàm xuất file Excel đẹp mắt kèm Điểm Nề Nếp
+  // Hàm xuất file Excel đẹp mắt kèm Điểm Nề Nếp và Thầy/Cô
   const exportToExcel = (data: any[], fileName: string) => {
     if (!data || data.length === 0) return;
 
@@ -162,6 +162,7 @@ export function ManageStudents({
       'Họ và Tên': item.HoVaTen || '',
       'Giới Tính': item.GioiTinh || '',
       'Lớp': item.Lop || '',
+      'Thầy/Cô': item.ThayCo || '', // Thêm cột Thầy/Cô vào file Excel
       'Phòng': item.Phong || '',
       'Điểm Nề Nếp': item.DiemNeNep ?? '',
       'Vắng': item.Vang || '',
@@ -184,6 +185,7 @@ export function ManageStudents({
       { wch: 25 }, // Họ và Tên
       { wch: 10 }, // Giới Tính
       { wch: 15 }, // Lớp
+      { wch: 20 }, // Thầy/Cô
       { wch: 12 }, // Phòng
       { wch: 15 }, // Điểm Nề Nếp
       { wch: 8 },  // Vắng
@@ -196,7 +198,7 @@ export function ManageStudents({
     XLSX.writeFile(workbook, `${fileName}.xlsx`);
   };
 
-  // Lọc dữ liệu an toàn tránh lỗi toLowerCase của undefined[cite: 18]
+  // Lọc dữ liệu an toàn tránh lỗi toLowerCase của undefined[cite: 9]
   const filteredStudents = students.filter((student) => {
     const studentName = String(student?.name || '').toLowerCase();
     const studentId = String(student?.studentId || '').toLowerCase();
@@ -258,6 +260,7 @@ export function ManageStudents({
             HoVaTen: s.HoVaTen || s.Ten || s.name || '',
             GioiTinh: s.GioiTinh || s.gender || 'Nam',
             Lop: s.Lop || s.className || '',
+            ThayCo: s.ThayCo || s.thayCo || '', // Lưu thêm Thầy/Cô vào lịch sử CSDL
             Phong: s.Phong || s.TenPhong || s.room || null,
             DiemNeNep: diemMap.has(mssvVal) ? diemMap.get(mssvVal) : (s.DiemNeNep ?? null),
             Vang: s.Vang ? String(s.Vang) : null,
@@ -277,7 +280,7 @@ export function ManageStudents({
         if (insertError) throw insertError;
       }
 
-      // 🌟 ĐÃ THÊM: Cập nhật trả isLocked về false và xóa dữ liệu khóa phòng trong RoomConfig[cite: 19]
+      // Cập nhật trả isLocked về false và xóa dữ liệu khóa phòng trong RoomConfig[cite: 9]
       const { error: roomConfigError } = await supabase
         .from('RoomConfig')
         .upsert({

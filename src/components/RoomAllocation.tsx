@@ -42,7 +42,6 @@ interface RoomAllocationProps {
 
 const checkIsLate = (st: any): boolean => {
   if (!st) return false;
-  if (st.isLate === true || st.isLate === 'true' || st.isLate === 1) return true;
   const val = st.DiTre ?? st.diTre ?? st.Di_Tre ?? st.ditre;
   if (val === true || val === 1) return true;
   const str = String(val || '').trim().toLowerCase();
@@ -183,7 +182,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return Math.max(0, 10 - totalPenalty);
   }, [scores]);
 
-  // --- HÀM LƯU ĐIỂM TỰ ĐỘNG LÊN SUPABASE NGAY LẬP TỨC CHO TỪNG HỌC SINH ---
   const saveStudentScoreToDB = async (studentKey: string, updatedStudentScores: Record<number, RecordEntry[]>) => {
     try {
       let hoVaTen = '';
@@ -247,7 +245,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       const newStudentScores = { ...studentData, [day]: updatedDayData };
       const newAllScores = { ...prev, [studentKey]: newStudentScores };
 
-      // Gọi lưu thẳng lên DB ngầm lập tức
       saveStudentScoreToDB(studentKey, newStudentScores);
 
       return newAllScores;
@@ -359,11 +356,18 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const calculateRoomAllocation = useCallback((): Room[] => {
     const safeStudents = Array.isArray(students) ? students : [];
-    const allValidStudents = safeStudents.filter((s: any) => {
-      if (!s) return false;
-      if (s.isAbsent || s.Vang === 'x' || s.Vang === 'X') return false;
-      return true;
+    // Loại bỏ các sinh viên vắng và lọc trùng lặp theo MSSV ngay từ đầu
+    const uniqueMap = new Map();
+    safeStudents.forEach((s: any) => {
+      if (!s) return;
+      if (s.isAbsent || s.Vang === 'x' || s.Vang === 'X') return;
+      const mssv = getStudentCode(s);
+      if (mssv && !uniqueMap.has(mssv)) {
+        uniqueMap.set(mssv, s);
+      }
     });
+
+    const allValidStudents = Array.from(uniqueMap.values());
 
     const normalizeGender = (val: any) => {
       if (!val) return '';
@@ -646,10 +650,17 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const absentStudentsList = useMemo(() => {
     const safeStudents = Array.isArray(students) ? students : [];
-    return safeStudents.filter((s: any) => {
-      if (!s) return false;
-      return s.isAbsent || s.Vang === 'x' || s.Vang === 'X';
+    const uniqueMap = new Map();
+    safeStudents.forEach((s: any) => {
+      if (!s) return;
+      if (s.isAbsent || s.Vang === 'x' || s.Vang === 'X') {
+        const mssv = getStudentCode(s);
+        if (mssv && !uniqueMap.has(mssv)) {
+          uniqueMap.set(mssv, s);
+        }
+      }
     });
+    return Array.from(uniqueMap.values());
   }, [students]);
 
   const getRoomsToDisplay = useMemo(() => {
@@ -657,26 +668,29 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     const safeStudents = Array.isArray(students) ? students : [];
 
     return baseRooms.map(room => {
+      const seenMssv = new Set<string>();
       const updatedStudents = (room.students || []).map(lockedStudent => {
         if (!lockedStudent) return null;
         const mssv = getStudentCode(lockedStudent);
+        if (!mssv || seenMssv.has(mssv)) return null;
         
         const freshStudent = safeStudents.find(s => s && getStudentCode(s) === mssv);
 
+        let isLateVal = false;
         if (freshStudent) {
-          const isLateVal = checkIsLate(freshStudent) || checkIsLate(lockedStudent);
+          isLateVal = checkIsLate(freshStudent) || checkIsLate(lockedStudent);
+          seenMssv.add(mssv);
           return {
             ...lockedStudent,
             ...freshStudent,
-            isLate: isLateVal,
             DiTre: isLateVal ? 'x' : null
           };
         }
 
-        const isLateVal = checkIsLate(lockedStudent);
+        isLateVal = checkIsLate(lockedStudent);
+        seenMssv.add(mssv);
         return {
           ...lockedStudent,
-          isLate: isLateVal,
           DiTre: isLateVal ? 'x' : null
         };
       }).filter((s): s is any => {
@@ -693,13 +707,36 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const rooms = getRoomsToDisplay;
 
+  // Tính số lượng Nam và Nữ đang phân phòng
+  const genderCounts = useMemo(() => {
+    let maleCount = 0;
+    let femaleCount = 0;
+
+    rooms.forEach(room => {
+      (room.students || []).forEach((st: any) => {
+        if (!st) return;
+        const g = String(st.GioiTinh || st.gender || '').trim().toLowerCase();
+        if (g === 'nam') {
+          maleCount++;
+        } else if (g === 'nữ' || g === 'nu') {
+          femaleCount++;
+        }
+      });
+    });
+
+    return { maleCount, femaleCount };
+  }, [rooms]);
+
   const lateStudentsList = useMemo(() => {
     const result: { student: any; roomNumber: number }[] = [];
+    const seenMssv = new Set<string>();
     
     rooms.forEach(room => {
       (room.students || []).forEach((st: any) => {
         if (!st) return;
-        if (checkIsLate(st)) {
+        const mssv = getStudentCode(st);
+        if (checkIsLate(st) && mssv && !seenMssv.has(mssv)) {
+          seenMssv.add(mssv);
           result.push({ student: st, roomNumber: room.roomNumber });
         }
       });
@@ -709,8 +746,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     safeStudents.forEach((st: any) => {
       if (!st || st.isAbsent || st.Vang === 'x' || st.Vang === 'X') return;
       const mssv = getStudentCode(st);
-      const existsInResult = result.some(r => getStudentCode(r.student) === mssv);
-      if (!existsInResult && checkIsLate(st)) {
+      if (mssv && !seenMssv.has(mssv) && checkIsLate(st)) {
+        seenMssv.add(mssv);
         result.push({ student: st, roomNumber: st.Phong || (st as any).room || 0 });
       }
     });
@@ -986,7 +1023,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
         await supabase
           .from('DanhSachSinhVien')
-          .update({ Vang: null, Phong: targetRoomForAdd, DiTre: 'x', isLate: true, late_at: new Date().toISOString() })
+          .update({ Vang: null, Phong: targetRoomForAdd, DiTre: 'x' })
           .eq('MSSV', mssvValue);
 
         await supabase
@@ -1002,21 +1039,15 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           Vang: null,
           isAbsent: false,
           Phong: targetRoomForAdd,
-          DiTre: 'x',
-          isLate: true,
-          late_at: new Date().toISOString()
+          DiTre: 'x'
         };
 
         if (setStudents) {
-          setStudents((prev) =>
-            (Array.isArray(prev) ? prev : []).map((s) => {
-              if (!s) return s;
-              if (getStudentCode(s) === selectedAbsentStudentId) {
-                return updatedStudentObj as unknown as Student;
-              }
-              return s;
-            })
-          );
+          setStudents((prev) => {
+            const list = Array.isArray(prev) ? prev : [];
+            const filtered = list.filter(s => getStudentCode(s) !== mssvValue);
+            return [...filtered, updatedStudentObj as unknown as Student];
+          });
         }
       } else {
         if (!manualMssv.trim() || !manualName.trim()) {
@@ -1045,9 +1076,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           ThayCo: teacherVal,
           Phong: targetRoomForAdd,
           Vang: null,
-          DiTre: 'x',
-          isLate: true,
-          late_at: new Date().toISOString()
+          DiTre: 'x'
         };
 
         const { data: existingStudent } = await supabase
@@ -1087,11 +1116,22 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         updatedStudentObj = newStudentPayload;
 
         if (setStudents) {
-          setStudents((prev) => [...(Array.isArray(prev) ? prev : []), updatedStudentObj as unknown as Student]);
+          setStudents((prev) => {
+            const list = Array.isArray(prev) ? prev : [];
+            const filtered = list.filter(s => getStudentCode(s) !== mssvValue);
+            return [...filtered, updatedStudentObj as unknown as Student];
+          });
         }
       }
 
       let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
+      
+      // Xóa sinh viên này khỏi tất cả các phòng cũ trước khi đưa vào phòng mới để tránh trùng lặp
+      updatedLockedRooms = updatedLockedRooms.map(r => ({
+        ...r,
+        students: (r.students || []).filter(st => getStudentCode(st) !== mssvValue)
+      }));
+
       const roomIndex = updatedLockedRooms.findIndex(r => r.roomNumber === targetRoomForAdd);
 
       const resolvedGender = targetRoomGender === 'Trống' 
@@ -1334,9 +1374,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   }, [rooms]);
 
   const totalAbsent = useMemo(() => {
-    const safeStudents = Array.isArray(students) ? students : [];
-    return safeStudents.filter((s: any) => s && (s.isAbsent || s.Vang === 'x' || s.Vang === 'X')).length;
-  }, [students]);
+    return absentStudentsList.length;
+  }, [absentStudentsList]);
 
   return (
     <div className="room-container modern-ui" style={{ position: 'relative' }}>
@@ -1372,6 +1411,15 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               <Users size={16} color="#0284c7" />
               <span>Tổng SV: <strong>{totalActiveAllocated} SV</strong></span>
             </div>
+            
+            {/* THÊM HIỂN THỊ SỐ LƯỢNG NAM & NỮ */}
+            <div className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#eff6ff', padding: '6px 12px', borderRadius: '8px', border: '1px solid #bfdbfe', fontSize: '13px', color: '#1d4ed8' }}>
+              <span>👨 Nam: <strong>{genderCounts.maleCount}</strong></span>
+            </div>
+            <div className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#fce7f3', padding: '6px 12px', borderRadius: '8px', border: '1px solid #fbcfe8', fontSize: '13px', color: '#db2777' }}>
+              <span>👩 Nữ: <strong>{genderCounts.femaleCount}</strong></span>
+            </div>
+
             <div className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#f8fafc', padding: '6px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px' }}>
               <Home size={16} color="#475569" />
               <span>Phòng: <strong>{rooms.length}</strong></span>
