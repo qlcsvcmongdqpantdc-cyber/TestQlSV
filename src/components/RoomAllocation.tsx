@@ -356,7 +356,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const calculateRoomAllocation = useCallback((): Room[] => {
     const safeStudents = Array.isArray(students) ? students : [];
-    // Loại bỏ các sinh viên vắng và lọc trùng lặp theo MSSV ngay từ đầu
     const uniqueMap = new Map();
     safeStudents.forEach((s: any) => {
       if (!s) return;
@@ -707,7 +706,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
   const rooms = getRoomsToDisplay;
 
-  // Tính số lượng Nam và Nữ đang phân phòng
   const genderCounts = useMemo(() => {
     let maleCount = 0;
     let femaleCount = 0;
@@ -857,6 +855,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         const mssvValue = getStudentCode(st);
         const hoVaTen = st?.name || (st as any).HoVaTen || '';
         if (mssvValue) {
+          const finalScore = calculateFinalScore(mssvValue);
+
           await supabase
             .from('DanhSachSinhVien')
             .update({ Phong: newRoomNum })
@@ -867,7 +867,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             .upsert({
               MSV: mssvValue,
               HoVaTen: hoVaTen,
-              Phong: newRoomNum
+              Phong: newRoomNum,
+              DiemNeNep: finalScore
             }, { onConflict: 'MSV' });
         }
       }
@@ -899,6 +900,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     }
   };
 
+  // Nút Xác Nhận Phòng sẽ lưu phòng và đồng thời đẩy DiemNeNep lên bảng ChamDiem[cite: 10, 11]
   const handleConfirmAndSaveRooms = async () => {
     if (!canManage) return;
     setIsSavingRooms(true);
@@ -911,6 +913,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           const mssvValue = getStudentCode(st);
           const hoVaTen = st?.name || (st as any).HoVaTen || '';
           if (mssvValue) {
+            const finalScore = calculateFinalScore(mssvValue);
+
             await supabase
               .from('DanhSachSinhVien')
               .update({ Phong: room.roomNumber, Vang: null })
@@ -921,7 +925,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               .upsert({
                 MSV: mssvValue,
                 HoVaTen: hoVaTen,
-                Phong: room.roomNumber
+                Phong: room.roomNumber,
+                DiemNeNep: finalScore
               }, { onConflict: 'MSV' });
           }
         }
@@ -931,6 +936,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         const mssvValue = getStudentCode(st);
         const hoVaTen = (st as any).HoVaTen || (st as any).name || '';
         if (mssvValue) {
+          const finalScore = calculateFinalScore(mssvValue);
+
           await supabase
             .from('DanhSachSinhVien')
             .update({ Phong: null, Vang: 'x' })
@@ -941,7 +948,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
             .upsert({
               MSV: mssvValue,
               HoVaTen: hoVaTen,
-              Phong: null
+              Phong: null,
+              DiemNeNep: finalScore
             }, { onConflict: 'MSV' });
         }
       }
@@ -959,7 +967,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         throw new Error(configError.message);
       }
 
-      showToast('Đã lưu cố định sơ đồ phòng và đồng bộ số phòng lên CSDL thành công!', 'success');
+      showToast('Đã lưu cố định sơ đồ phòng và đồng bộ số phòng, điểm nề nếp lên CSDL thành công!', 'success');
     } catch (err: any) {
       console.error('Lỗi khi lưu phòng:', err);
       showToast('Lỗi khi lưu phòng: ' + (err?.message || err), 'error');
@@ -1020,6 +1028,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
         mssvValue = getStudentCode(studentToRestore);
         hoVaTen = (studentToRestore as any).HoVaTen || (studentToRestore as any).name || '';
+        const finalScore = calculateFinalScore(mssvValue);
 
         await supabase
           .from('DanhSachSinhVien')
@@ -1031,7 +1040,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           .upsert({
             MSV: mssvValue,
             HoVaTen: hoVaTen,
-            Phong: targetRoomForAdd
+            Phong: targetRoomForAdd,
+            DiemNeNep: finalScore
           }, { onConflict: 'MSV' });
 
         updatedStudentObj = {
@@ -1060,6 +1070,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         hoVaTen = manualName.trim();
         studentGender = manualGender;
         const teacherVal = manualTeacher.trim() || 'Chưa phân công';
+        const finalScore = calculateFinalScore(mssvValue);
 
         if (targetRoomGender !== 'Trống') {
           if (targetRoomGender !== manualGender) {
@@ -1110,7 +1121,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           .upsert({
             MSV: mssvValue,
             HoVaTen: hoVaTen,
-            Phong: targetRoomForAdd
+            Phong: targetRoomForAdd,
+            DiemNeNep: finalScore
           }, { onConflict: 'MSV' });
 
         updatedStudentObj = newStudentPayload;
@@ -1126,7 +1138,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
       let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
       
-      // Xóa sinh viên này khỏi tất cả các phòng cũ trước khi đưa vào phòng mới để tránh trùng lặp
       updatedLockedRooms = updatedLockedRooms.map(r => ({
         ...r,
         students: (r.students || []).filter(st => getStudentCode(st) !== mssvValue)
@@ -1182,6 +1193,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     try {
       const mssvValue = getStudentCode(studentToDelete);
       const hoVaTen = (studentToDelete as any).HoVaTen || (studentToDelete as any).name || '';
+      const finalScore = calculateFinalScore(mssvValue);
 
       await supabase
         .from('DanhSachSinhVien')
@@ -1193,7 +1205,8 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         .upsert({
           MSV: mssvValue,
           HoVaTen: hoVaTen,
-          Phong: null
+          Phong: null,
+          DiemNeNep: finalScore
         }, { onConflict: 'MSV' });
 
       let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
@@ -1412,7 +1425,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               <span>Tổng SV: <strong>{totalActiveAllocated} SV</strong></span>
             </div>
             
-            {/* THÊM HIỂN THỊ SỐ LƯỢNG NAM & NỮ */}
             <div className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#eff6ff', padding: '6px 12px', borderRadius: '8px', border: '1px solid #bfdbfe', fontSize: '13px', color: '#1d4ed8' }}>
               <span>👨 Nam: <strong>{genderCounts.maleCount}</strong></span>
             </div>
