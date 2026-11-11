@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue } from 'react';
 import { Home, Users, AlertTriangle, Crown, UserCheck, Filter, Lock, Unlock, UserX, AlertCircle, UserPlus, CheckCircle, Plus, Edit3, Eye, Settings, Trash2, FileSpreadsheet, Clock } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import type { Student } from '../types/student';
@@ -40,13 +40,39 @@ interface RoomAllocationProps {
   currentUser?: (AuthUser & { can_manage?: boolean }) | null;
 }
 
+const isTruthyLateValue = (val: any): boolean => {
+  if (val === true || val === 1) return true;
+  if (val === false || val === 0 || val === null || val === undefined) return false;
+  const str = String(val).trim().toLowerCase();
+  if (['', '0', 'false', 'no', 'null', 'undefined', 'không', 'khong'].includes(str)) return false;
+  return true; // 'x', 'X', '1', 'true', 'có', 'trễ', 'đi trễ', ...
+};
+
+// Bỏ dấu + ký tự đặc biệt để so khớp tên cột linh hoạt (DiTre, di_tre, isLate, TichDiTre...)
+const normalizeKey = (k: string): string =>
+  k.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').replace(/[^a-z0-9]/gi, '').toLowerCase();
+
 const checkIsLate = (st: any): boolean => {
   if (!st) return false;
-  const val = st.DiTre ?? st.diTre ?? st.Di_Tre ?? st.ditre;
-  if (val === true || val === 1) return true;
+  // Logic cũ: giữ nguyên các key đã biết
+  const val = st.DiTre ?? st.diTre ?? st.di_tre ?? st.TichDiTre ?? st.tich_di_tre;
+  if (val === true || val === 1 || val === '1') return true;
   const str = String(val || '').trim().toLowerCase();
-  return str === 'x' || str === 'true' || str === '1';
+  if (str === 'x' || str === 'true' || str === '1') return true;
+
+  // Bổ sung: quét thêm các tên key khác có thể mang ý nghĩa "đi trễ" (isLate, late, Tre, ...)
+  for (const key of Object.keys(st)) {
+    const nk = normalizeKey(key);
+    if (nk === 'lateat') continue; // late_at là mốc thời gian, không dùng để xác định
+    if (nk === 'ditre' || nk === 'tichditre' || nk === 'islate' || nk === 'late' || nk === 'tre') {
+      if (isTruthyLateValue(st[key])) return true;
+    }
+  }
+  return false;
 };
+
+// Tạo 1 lần duy nhất (kết quả sắp xếp y hệt localeCompare 'vi' + accent nhưng nhanh hơn nhiều)
+const viCollator = new Intl.Collator('vi', { sensitivity: 'accent' });
 
 const getStudentCode = (st: any): string => {
   if (!st) return '';
@@ -76,12 +102,16 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [selectedTeacherFilter, setSelectedTeacherFilter] = useState<string>('');
   
   const [searchTerm, setSearchTerm] = useState<string>('');
+  // Ô nhập vẫn phản hồi tức thì, còn việc lọc/vẽ lại danh sách phòng được hoãn lại cho đỡ giật
+  const deferredSearch = useDeferredValue(searchTerm);
 
   const [studentToDelete, setStudentToDelete] = useState<Student | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [isSavingRooms, setIsSavingRooms] = useState<boolean>(false);
 
   const [scores, setScores] = useState<ScoringMap>({});
+  // Luôn giữ bản điểm mới nhất để handler không bị stale closure
+  const scoresRef = useRef<ScoringMap>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [violations, setViolations] = useState<ViolationRule[]>(DEFAULT_VIOLATIONS);
   const [isViolationModalOpen, setIsViolationModalOpen] = useState<boolean>(false);
@@ -119,23 +149,46 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   const [extraEmptyRooms, setExtraEmptyRooms] = useState<{ gender: 'Nam' | 'Nữ' }[]>([]);
 
   useEffect(() => {
+    let isMounted = true;
+
     const fetchScoringData = async () => {
       try {
-        const { data: ruleData } = await supabase.from('ViolationRules').select('*');
+        let activeRules: ViolationRule[] = [...DEFAULT_VIOLATIONS];
+
+        const { data: ruleData, error: ruleError } = await supabase.from('ViolationRules').select('*');
+        if (ruleError) console.error('Lỗi tải ViolationRules:', ruleError.message);
+
         if (ruleData && ruleData.length > 0) {
-          const customRules = ruleData.map((r: any) => ({
+          const customRules: ViolationRule[] = ruleData.map((r: any) => ({
             code: r.Code || r.code,
             displayCode: r.DisplayCode || r.displayCode || r.Code || r.code,
             label: r.Label || r.label || `Lỗi: ${r.Code || r.code}`,
             penalty: Number(r.Penalty ?? r.penalty) || 1,
           }));
-          const mapRules = new Map();
+          const mapRules = new Map<string, ViolationRule>();
           DEFAULT_VIOLATIONS.forEach(v => mapRules.set(v.code, v));
           customRules.forEach(v => mapRules.set(v.code, v));
-          setViolations(Array.from(mapRules.values()));
+          activeRules = Array.from(mapRules.values());
+          if (isMounted) setViolations(activeRules);
         }
 
-        const { data: scoreData } = await supabase.from('ChamDiem').select('*');
+        const PAGE_SIZE = 1000;
+        const scoreData: any[] = [];
+        for (let from = 0; ; from += PAGE_SIZE) {
+          const { data: pageData, error: scoreError } = await supabase
+            .from('ChamDiem')
+            .select('*')
+            .order('MSV', { ascending: true })
+            .range(from, from + PAGE_SIZE - 1);
+          if (scoreError) {
+            console.error('Lỗi tải ChamDiem:', scoreError.message, scoreError);
+            break;
+          }
+          if (!pageData || pageData.length === 0) break;
+          scoreData.push(...pageData);
+          if (pageData.length < PAGE_SIZE) break;
+        }
+
         if (scoreData && scoreData.length > 0) {
           const loadedScores: ScoringMap = {};
           const loadedNotes: Record<string, string> = {};
@@ -151,7 +204,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                 const dayEntries: RecordEntry[] = [];
                 codes.forEach((c) => {
                   const trimmedCode = c.trim();
-                  const target = violations.find((v) => v.code === trimmedCode || v.displayCode === trimmedCode);
+                  const target = activeRules.find((v) => v.code === trimmedCode || v.displayCode === trimmedCode);
                   if (target) {
                     dayEntries.push({ code: target.code, displayCode: target.displayCode, penalty: target.penalty });
                   } else if (trimmedCode) {
@@ -162,15 +215,22 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
               }
             }
           });
-          setScores(loadedScores);
-          setNotes(loadedNotes);
+          if (isMounted) {
+            scoresRef.current = loadedScores;
+            setScores(loadedScores);
+            setNotes(loadedNotes);
+          }
         }
       } catch (err) {
         console.error('Lỗi tải dữ liệu chấm điểm:', err);
       }
     };
+
     fetchScoringData();
-  }, [violations]);
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const calculateFinalScore = useCallback((studentKey: string) => {
     const studentData = scores[studentKey];
@@ -182,7 +242,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return Math.max(0, 10 - totalPenalty);
   }, [scores]);
 
-  const saveStudentScoreToDB = async (studentKey: string, updatedStudentScores: Record<number, RecordEntry[]>) => {
+  const saveStudentScoreToDB = async (studentKey: string, updatedStudentScores: Record<number, RecordEntry[]>): Promise<boolean> => {
     try {
       let hoVaTen = '';
       let roomNum: number | null = null;
@@ -216,17 +276,23 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       const rowPayload = {
         MSV: studentKey,
         HoVaTen: hoVaTen || studentKey,
-        DiemNeNep: finalScore,
+        DiemNeNep: Math.round(finalScore),
         Phong: roomNum,
         ...dayDataRecord
       };
 
-      await supabase
+      const { error } = await supabase
         .from('ChamDiem')
         .upsert([rowPayload], { onConflict: 'MSV' });
 
+      if (error) {
+        console.error('Lỗi lưu điểm lên ChamDiem:', error.message, error);
+        return false;
+      }
+      return true;
     } catch (err) {
       console.error('Lỗi auto-save điểm:', err);
+      return false;
     }
   };
 
@@ -236,19 +302,27 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
       return;
     }
 
-    setScores((prev) => {
-      const studentData = prev[studentKey] || {};
-      const dayData = studentData[day] || [];
-      const exists = dayData.some((item) => item.code === code);
-      const updatedDayData = exists ? dayData.filter((item) => item.code !== code) : [...dayData, { code, displayCode, penalty }];
-      
-      const newStudentScores = { ...studentData, [day]: updatedDayData };
-      const newAllScores = { ...prev, [studentKey]: newStudentScores };
+    const prev = scoresRef.current;
+    const studentData = prev[studentKey] || {};
+    const dayData = studentData[day] || [];
+    const exists = dayData.some((item) => item.code === code);
+    const updatedDayData = exists
+      ? dayData.filter((item) => item.code !== code)
+      : [...dayData, { code, displayCode, penalty }];
 
-      saveStudentScoreToDB(studentKey, newStudentScores);
+    const newStudentScores = { ...studentData, [day]: updatedDayData };
+    const newAllScores = { ...prev, [studentKey]: newStudentScores };
 
-      return newAllScores;
-    });
+    scoresRef.current = newAllScores;
+    setScores(newAllScores);
+
+    const ok = await saveStudentScoreToDB(studentKey, newStudentScores);
+    if (!ok) {
+      const rolledBack = { ...scoresRef.current, [studentKey]: studentData };
+      scoresRef.current = rolledBack;
+      setScores(rolledBack);
+      showToast('Lưu điểm lên database thất bại! Kiểm tra console để biết chi tiết.', 'error');
+    }
   };
 
   const handleViolationSelectChange = async (studentKey: string, day: number, e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -384,9 +458,9 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         const firstNameA = partsA[partsA.length - 1] || '';
         const firstNameB = partsB[partsB.length - 1] || '';
 
-        const cmp = firstNameA.localeCompare(firstNameB, 'vi', { sensitivity: 'accent' });
+        const cmp = viCollator.compare(firstNameA, firstNameB);
         if (cmp !== 0) return cmp;
-        return fullNameA.localeCompare(fullNameB, 'vi', { sensitivity: 'accent' });
+        return viCollator.compare(fullNameA, fullNameB);
       });
     };
 
@@ -535,6 +609,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   useEffect(() => {
     let isMounted = true;
     let channel: any = null;
+    let studentsTimer: ReturnType<typeof setTimeout> | null = null;
 
     const fetchRoomConfigFromDB = async () => {
       try {
@@ -565,13 +640,16 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'DanhSachSinhVien' },
-          async () => {
-            if (setStudents && isMounted) {
-              const { data, error } = await supabase.from('DanhSachSinhVien').select('*');
-              if (!error && data && isMounted) {
-                setStudents(data as unknown as Student[]);
+          () => {
+            if (studentsTimer) clearTimeout(studentsTimer);
+            studentsTimer = setTimeout(async () => {
+              if (setStudents && isMounted) {
+                const { data, error } = await supabase.from('DanhSachSinhVien').select('*');
+                if (!error && data && isMounted) {
+                  setStudents(data as unknown as Student[]);
+                }
               }
-            }
+            }, 400);
           }
         )
         .on(
@@ -600,6 +678,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
     return () => {
       isMounted = false;
+      if (studentsTimer) clearTimeout(studentsTimer);
       if (channel) {
         supabase.removeChannel(channel);
       }
@@ -662,9 +741,16 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     return Array.from(uniqueMap.values());
   }, [students]);
 
-  const getRoomsToDisplay = useMemo(() => {
+ const getRoomsToDisplay = useMemo(() => {
     let baseRooms = (!isRoomLocked || !lockedRoomsData) ? calculateRoomAllocation() : lockedRoomsData;
     const safeStudents = Array.isArray(students) ? students : [];
+
+    const freshMap = new Map<string, any>();
+    safeStudents.forEach(s => {
+      if (!s) return;
+      const code = getStudentCode(s);
+      if (code && !freshMap.has(code)) freshMap.set(code, s);
+    });
 
     return baseRooms.map(room => {
       const seenMssv = new Set<string>();
@@ -673,23 +759,14 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         const mssv = getStudentCode(lockedStudent);
         if (!mssv || seenMssv.has(mssv)) return null;
         
-        const freshStudent = safeStudents.find(s => s && getStudentCode(s) === mssv);
-
-        let isLateVal = false;
-        if (freshStudent) {
-          isLateVal = checkIsLate(freshStudent) || checkIsLate(lockedStudent);
-          seenMssv.add(mssv);
-          return {
-            ...lockedStudent,
-            ...freshStudent,
-            DiTre: isLateVal ? 'x' : null
-          };
-        }
-
-        isLateVal = checkIsLate(lockedStudent);
+        const freshStudent = freshMap.get(mssv);
+        const targetObj = freshStudent || lockedStudent;
+        const isLateVal = checkIsLate(targetObj);
+        
         seenMssv.add(mssv);
         return {
           ...lockedStudent,
+          ...(freshStudent || {}),
           DiTre: isLateVal ? 'x' : null
         };
       }).filter((s): s is any => {
@@ -851,26 +928,19 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         return;
       }
 
-      for (const st of targetRoomObj.students) {
-        const mssvValue = getStudentCode(st);
-        const hoVaTen = st?.name || (st as any).HoVaTen || '';
-        if (mssvValue) {
-          const finalScore = calculateFinalScore(mssvValue);
+      const moveRows = targetRoomObj.students
+        .map((st: any) => ({
+          MSV: getStudentCode(st),
+          HoVaTen: st?.name || st?.HoVaTen || '',
+          Phong: newRoomNum,
+        }))
+        .filter(r => r.MSV);
 
-          await supabase
-            .from('DanhSachSinhVien')
-            .update({ Phong: newRoomNum })
-            .eq('MSSV', mssvValue);
-
-          await supabase
-            .from('ChamDiem')
-            .upsert({
-              MSV: mssvValue,
-              HoVaTen: hoVaTen,
-              Phong: newRoomNum,
-              DiemNeNep: finalScore
-            }, { onConflict: 'MSV' });
-        }
+      if (moveRows.length > 0) {
+        await Promise.all([
+          supabase.from('DanhSachSinhVien').update({ Phong: newRoomNum }).in('MSSV', moveRows.map(r => r.MSV)),
+          supabase.from('ChamDiem').upsert(moveRows, { onConflict: 'MSV' }),
+        ]);
       }
 
       let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
@@ -900,59 +970,46 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     }
   };
 
-  // Nút Xác Nhận Phòng sẽ lưu phòng và đồng thời đẩy DiemNeNep lên bảng ChamDiem[cite: 10, 11]
   const handleConfirmAndSaveRooms = async () => {
     if (!canManage) return;
     setIsSavingRooms(true);
 
     try {
       const currentRoomsToSave = rooms; 
+      const jobs: PromiseLike<any>[] = [];
 
       for (const room of currentRoomsToSave) {
-        for (const st of (room.students || [])) {
-          const mssvValue = getStudentCode(st);
-          const hoVaTen = st?.name || (st as any).HoVaTen || '';
-          if (mssvValue) {
-            const finalScore = calculateFinalScore(mssvValue);
+        const rows = (room.students || [])
+          .map((st: any) => ({
+            MSV: getStudentCode(st),
+            HoVaTen: st?.name || st?.HoVaTen || '',
+            Phong: room.roomNumber,
+          }))
+          .filter(r => r.MSV);
 
-            await supabase
-              .from('DanhSachSinhVien')
-              .update({ Phong: room.roomNumber, Vang: null })
-              .eq('MSSV', mssvValue);
-
-            await supabase
-              .from('ChamDiem')
-              .upsert({
-                MSV: mssvValue,
-                HoVaTen: hoVaTen,
-                Phong: room.roomNumber,
-                DiemNeNep: finalScore
-              }, { onConflict: 'MSV' });
-          }
-        }
+        if (rows.length === 0) continue;
+        jobs.push(
+          supabase.from('DanhSachSinhVien').update({ Phong: room.roomNumber, Vang: null }).in('MSSV', rows.map(r => r.MSV)),
+          supabase.from('ChamDiem').upsert(rows, { onConflict: 'MSV' })
+        );
       }
 
-      for (const st of absentStudentsList) {
-        const mssvValue = getStudentCode(st);
-        const hoVaTen = (st as any).HoVaTen || (st as any).name || '';
-        if (mssvValue) {
-          const finalScore = calculateFinalScore(mssvValue);
+      const absentRows = absentStudentsList
+        .map((st: any) => ({
+          MSV: getStudentCode(st),
+          HoVaTen: st?.HoVaTen || st?.name || '',
+          Phong: null as number | null,
+        }))
+        .filter(r => r.MSV);
 
-          await supabase
-            .from('DanhSachSinhVien')
-            .update({ Phong: null, Vang: 'x' })
-            .eq('MSSV', mssvValue);
-
-          await supabase
-            .from('ChamDiem')
-            .upsert({
-              MSV: mssvValue,
-              HoVaTen: hoVaTen,
-              Phong: null,
-              DiemNeNep: finalScore
-            }, { onConflict: 'MSV' });
-        }
+      if (absentRows.length > 0) {
+        jobs.push(
+          supabase.from('DanhSachSinhVien').update({ Phong: null, Vang: 'x' }).in('MSSV', absentRows.map(r => r.MSV)),
+          supabase.from('ChamDiem').upsert(absentRows, { onConflict: 'MSV' })
+        );
       }
+
+      await Promise.all(jobs);
 
       setLockedRoomsData(currentRoomsToSave);
       setIsRoomLocked(true);
@@ -967,7 +1024,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         throw new Error(configError.message);
       }
 
-      showToast('Đã lưu cố định sơ đồ phòng và đồng bộ số phòng, điểm nề nếp lên CSDL thành công!', 'success');
+      showToast('Đã lưu cố định sơ đồ phòng và đồng bộ số phòng lên CSDL thành công!', 'success');
     } catch (err: any) {
       console.error('Lỗi khi lưu phòng:', err);
       showToast('Lỗi khi lưu phòng: ' + (err?.message || err), 'error');
@@ -1028,7 +1085,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
 
         mssvValue = getStudentCode(studentToRestore);
         hoVaTen = (studentToRestore as any).HoVaTen || (studentToRestore as any).name || '';
-        const finalScore = calculateFinalScore(mssvValue);
 
         await supabase
           .from('DanhSachSinhVien')
@@ -1040,8 +1096,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           .upsert({
             MSV: mssvValue,
             HoVaTen: hoVaTen,
-            Phong: targetRoomForAdd,
-            DiemNeNep: finalScore
+            Phong: targetRoomForAdd
           }, { onConflict: 'MSV' });
 
         updatedStudentObj = {
@@ -1070,7 +1125,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         hoVaTen = manualName.trim();
         studentGender = manualGender;
         const teacherVal = manualTeacher.trim() || 'Chưa phân công';
-        const finalScore = calculateFinalScore(mssvValue);
 
         if (targetRoomGender !== 'Trống') {
           if (targetRoomGender !== manualGender) {
@@ -1121,8 +1175,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
           .upsert({
             MSV: mssvValue,
             HoVaTen: hoVaTen,
-            Phong: targetRoomForAdd,
-            DiemNeNep: finalScore
+            Phong: targetRoomForAdd
           }, { onConflict: 'MSV' });
 
         updatedStudentObj = newStudentPayload;
@@ -1193,7 +1246,6 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
     try {
       const mssvValue = getStudentCode(studentToDelete);
       const hoVaTen = (studentToDelete as any).HoVaTen || (studentToDelete as any).name || '';
-      const finalScore = calculateFinalScore(mssvValue);
 
       await supabase
         .from('DanhSachSinhVien')
@@ -1205,8 +1257,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         .upsert({
           MSV: mssvValue,
           HoVaTen: hoVaTen,
-          Phong: null,
-          DiemNeNep: finalScore
+          Phong: null
         }, { onConflict: 'MSV' });
 
       let updatedLockedRooms = lockedRoomsData ? [...lockedRoomsData] : calculateRoomAllocation();
@@ -1284,7 +1335,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
   };
 
   const filteredRooms = useMemo(() => {
-    const query = searchTerm.trim().toLowerCase();
+    const query = deferredSearch.trim().toLowerCase();
 
     let baseRooms = rooms;
     if (viewMode === 'single') {
@@ -1314,10 +1365,10 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         hasMatch
       };
     }).filter((room) => {
-      if (!selectedTeacherFilter && !searchTerm) return true;
+      if (!selectedTeacherFilter && !deferredSearch) return true;
       return room.hasMatch;
     });
-  }, [rooms, selectedTeacherFilter, searchTerm, viewMode, selectedRoomNumber]);
+  }, [rooms, selectedTeacherFilter, deferredSearch, viewMode, selectedRoomNumber]);
 
   useEffect(() => {
     if (!onUpdateRoomData || isRoomLocked) return;
@@ -1343,7 +1394,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
         loadedLeaders[room.roomNumber] = studentKey;
       }
     });
-    setLeaders(loadedLeaders);
+    setLeaders(prev => {
+      const pk = Object.keys(prev);
+      const nk = Object.keys(loadedLeaders);
+      if (pk.length === nk.length && nk.every(k => prev[Number(k)] === loadedLeaders[Number(k)])) return prev;
+      return loadedLeaders;
+    });
   }, [rooms]);
 
   const handleSelectLeader = (roomNumber: number, studentKey: string) => {
@@ -1850,7 +1906,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                       const isLate = checkIsLate(st);
                       
                       const isTeacherMatch = selectedTeacherFilter ? studentTeacher === selectedTeacherFilter : true;
-                      const query = searchTerm.trim().toLowerCase();
+                      const query = deferredSearch.trim().toLowerCase();
                       const isSearchMatch = query ? (String(studentName || '').toLowerCase().includes(query) || String(displayCode || '').toLowerCase().includes(query)) : true;
                       const isMatched = isTeacherMatch && isSearchMatch;
                       const finalScore = calculateFinalScore(studentKey);
@@ -1858,10 +1914,14 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                       return (
                         <div
                           key={studentKey + '-' + idx}
-                          className={`student-row-card ${isLeader ? 'is-leader' : ''} ${((selectedTeacherFilter || searchTerm) && isMatched) ? 'matched' : ''}`}
+                          className={`student-row-card ${isLeader ? 'is-leader' : ''} ${((selectedTeacherFilter || deferredSearch) && isMatched) ? 'matched' : ''}`}
                           style={{
-                            opacity: (selectedTeacherFilter || searchTerm) && !isMatched ? 0.35 : 1,
-                            border: (searchTerm && isSearchMatch) ? '1px solid #3b82f6' : undefined
+                            opacity: (selectedTeacherFilter || deferredSearch) && !isMatched ? 0.35 : 1,
+                            border: (deferredSearch && isSearchMatch) ? '1px solid #3b82f6' : undefined,
+                            ...(isLate ? {
+                              background: isLeader ? undefined : '#fffbeb',
+                              boxShadow: 'inset 4px 0 0 #f59e0b'
+                            } : {})
                           }}
                         >
                           <div className="student-info-top">
@@ -1877,8 +1937,12 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                                 {idx + 1}. {studentName} <span className="student-code-muted">({displayCode})</span>
                                 
                                 {isLate && (
-                                  <span style={{ marginLeft: '6px', fontSize: '11px', background: '#fef3c7', color: '#b45309', border: '1px solid #fcd34d', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
-                                    Trễ
+                                  <span
+                                    title="Sinh viên đi trễ"
+                                    style={{ marginLeft: '6px', display: 'inline-flex', alignItems: 'center', gap: '3px', verticalAlign: 'middle', fontSize: '11px', background: '#fef3c7', color: '#b45309', border: '1px solid #fcd34d', padding: '1px 6px', borderRadius: '4px', fontWeight: 700, whiteSpace: 'nowrap' }}
+                                  >
+                                    <Clock size={11} color="#d97706" />
+                                    Đi trễ
                                   </span>
                                 )}
                               </span>
@@ -1924,7 +1988,7 @@ export const RoomAllocation: React.FC<RoomAllocationProps> = ({
                                     ))}
                                     {canManage && (
                                       <select 
-                                        defaultValue=""
+                                        value=""
                                         onChange={(e) => handleViolationSelectChange(studentKey, day, e)} 
                                         className="violation-select-mini"
                                       >
